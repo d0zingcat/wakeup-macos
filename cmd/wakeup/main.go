@@ -387,6 +387,7 @@ func interactiveConfig() *config.Config {
 		DefaultDuration:      30 * time.Minute,
 		ACCheckInterval:      2 * time.Minute,
 		BatteryCheckInterval: 15 * time.Minute,
+		WakeDetectInterval:   30 * time.Second,
 	}
 
 	// Try loading existing config
