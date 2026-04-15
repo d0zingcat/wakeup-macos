@@ -252,12 +252,7 @@ func runInstall() {
 	// Step 1: Interactive config
 	cfg := interactiveConfig()
 
-	// Step 2: Write config file
-	fmt.Println()
-	fmt.Printf("[1/5] Writing config -> %s\n", configPath)
-	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
-		fatal("create config dir: %v", err)
-	}
+	// Step 2: Write config files (both user and system)
 	configContent := fmt.Sprintf(`# wakeup daemon configuration (auto-generated)
 
 worker_url = %q
@@ -267,8 +262,41 @@ check_interval = %q
 default_duration = %q
 `, cfg.WorkerURL, cfg.Token, cfg.DeviceID, cfg.CheckInterval.String(), cfg.DefaultDuration.String())
 
+	fmt.Println()
+	// Write system config (for launchd daemon running as root)
+	fmt.Printf("[1/5] Writing config -> %s\n", configPath)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		fatal("create config dir: %v", err)
+	}
 	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
 		fatal("write config: %v", err)
+	}
+
+	// Write user config (for CLI commands without sudo)
+	userConfigDir, err := config.ConfigDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not create user config dir: %v\n", err)
+	} else {
+		userConfigPath := filepath.Join(userConfigDir, "config.toml")
+		fmt.Printf("         Writing config -> %s\n", userConfigPath)
+		// Determine the real user (sudo sets SUDO_UID)
+		if sudoUID := os.Getenv("SUDO_UID"); sudoUID != "" {
+			uid, _ := strconv.Atoi(sudoUID)
+			gid := uid // default; overridden below if SUDO_GID is set
+			if sudoGID := os.Getenv("SUDO_GID"); sudoGID != "" {
+				gid, _ = strconv.Atoi(sudoGID)
+			}
+			if err := os.WriteFile(userConfigPath, []byte(configContent), 0600); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not write user config: %v\n", err)
+			} else {
+				os.Chown(userConfigPath, uid, gid)
+				os.Chown(userConfigDir, uid, gid)
+			}
+		} else {
+			if err := os.WriteFile(userConfigPath, []byte(configContent), 0600); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not write user config: %v\n", err)
+			}
+		}
 	}
 
 	// Step 3: Copy binary
@@ -319,7 +347,8 @@ default_duration = %q
 	fmt.Printf("  Device ID:      %s\n", cfg.DeviceID)
 	fmt.Printf("  Check interval: %s\n", cfg.CheckInterval)
 	fmt.Printf("  Wake duration:  %s\n", cfg.DefaultDuration)
-	fmt.Printf("  Config:         %s\n", configPath)
+	fmt.Printf("  Config (daemon): %s\n", configPath)
+	fmt.Printf("  Config (user):   ~/.config/wakeup/config.toml\n")
 	fmt.Printf("  Logs:           /var/log/wakeup.log\n")
 	fmt.Println()
 	fmt.Println("To wake this Mac from another device:")

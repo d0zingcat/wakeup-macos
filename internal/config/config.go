@@ -91,13 +91,13 @@ func (c *Config) Validate() error {
 func configPaths() []string {
 	var paths []string
 
-	// System config (for daemon)
-	paths = append(paths, "/etc/wakeup/config.toml")
-
-	// User config
+	// User config (preferred, no sudo needed)
 	if home, err := os.UserHomeDir(); err == nil {
 		paths = append(paths, filepath.Join(home, ".config", "wakeup", "config.toml"))
 	}
+
+	// System config (fallback, used by launchd daemon running as root)
+	paths = append(paths, "/etc/wakeup/config.toml")
 
 	return paths
 }
