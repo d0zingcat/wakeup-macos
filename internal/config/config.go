@@ -10,20 +10,24 @@ import (
 )
 
 type Config struct {
-	WorkerURL            string        `toml:"worker_url"`
-	Token                string        `toml:"token"`
-	DeviceID             string        `toml:"device_id"`
-	CheckInterval        time.Duration `toml:"check_interval"`
-	DefaultDuration      time.Duration `toml:"default_duration"`
-	ACCheckInterval      time.Duration `toml:"ac_check_interval"`
-	BatteryCheckInterval time.Duration `toml:"battery_check_interval"`
+	WorkerURL               string        `toml:"worker_url"`
+	Token                   string        `toml:"token"`
+	DeviceID                string        `toml:"device_id"`
+	CheckInterval           time.Duration `toml:"check_interval"`
+	DefaultDuration         time.Duration `toml:"default_duration"`
+	ACCheckInterval         time.Duration `toml:"ac_check_interval"`
+	BatteryCheckInterval    time.Duration `toml:"battery_check_interval"`
+	EnableDarkwakeDetection bool          `toml:"enable_darkwake_detection"`
+	WakeDetectInterval      time.Duration `toml:"wake_detect_interval"`
 }
 
 var defaults = Config{
-	CheckInterval:        15 * time.Minute,
-	DefaultDuration:      30 * time.Minute,
-	ACCheckInterval:      2 * time.Minute,
-	BatteryCheckInterval: 15 * time.Minute,
+	CheckInterval:           15 * time.Minute,
+	DefaultDuration:         30 * time.Minute,
+	ACCheckInterval:         2 * time.Minute,
+	BatteryCheckInterval:    15 * time.Minute,
+	EnableDarkwakeDetection: false,
+	WakeDetectInterval:      30 * time.Second,
 }
 
 func Load() (*Config, error) {
@@ -76,6 +80,15 @@ func Load() (*Config, error) {
 			cfg.BatteryCheckInterval = d
 		}
 	}
+	if v := os.Getenv("WAKEUP_ENABLE_DARKWAKE_DETECTION"); v != "" {
+		cfg.EnableDarkwakeDetection = v == "1" || v == "true"
+	}
+	if v := os.Getenv("WAKEUP_WAKE_DETECT_INTERVAL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err == nil {
+			cfg.WakeDetectInterval = d
+		}
+	}
 
 	// Resolve adaptive intervals: if user set check_interval but not the
 	// adaptive ones, inherit check_interval for both.
@@ -110,6 +123,9 @@ func (c *Config) Validate() error {
 	}
 	if c.BatteryCheckInterval < 1*time.Minute {
 		return fmt.Errorf("battery_check_interval must be at least 1m")
+	}
+	if c.EnableDarkwakeDetection && c.WakeDetectInterval < 10*time.Second {
+		return fmt.Errorf("wake_detect_interval must be at least 10s")
 	}
 	return nil
 }

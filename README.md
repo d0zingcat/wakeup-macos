@@ -213,8 +213,10 @@ token = "your-auth-token"
 device_id = "office"
 check_interval = "15m"
 default_duration = "30m"
-ac_check_interval = "2m"        # check interval on AC power (v0.2.0+)
-battery_check_interval = "15m"  # check interval on battery (v0.2.0+)
+ac_check_interval = "2m"              # check interval on AC power (v0.2.0+)
+battery_check_interval = "15m"        # check interval on battery (v0.2.0+)
+enable_darkwake_detection = false     # detect darkwake events (v0.2.1+, experimental)
+wake_detect_interval = "30s"          # darkwake detection tick interval (v0.2.1+)
 ```
 
 All values can be overridden with environment variables:
@@ -228,6 +230,8 @@ All values can be overridden with environment variables:
 | `WAKEUP_DEFAULT_DURATION` | Default wake duration (e.g. `1h`) |
 | `WAKEUP_AC_CHECK_INTERVAL` | Check interval on AC power (e.g. `2m`) |
 | `WAKEUP_BATTERY_CHECK_INTERVAL` | Check interval on battery (e.g. `15m`) |
+| `WAKEUP_ENABLE_DARKWAKE_DETECTION` | Enable darkwake detection (`true`/`1`) |
+| `WAKEUP_WAKE_DETECT_INTERVAL` | Darkwake detection interval (e.g. `30s`) |
 
 ## Worker API
 

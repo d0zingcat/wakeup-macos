@@ -21,5 +21,12 @@ ac_check_interval = "2m"
 # On battery: longer interval to preserve battery life
 battery_check_interval = "15m"
 
+# Darkwake detection (v0.2.1+, experimental)
+# When enabled, the daemon detects system wake events (including darkwake)
+# via wall clock time jumps and checks for signals opportunistically.
+# This can reduce effective latency below the check interval.
+# enable_darkwake_detection = true
+# wake_detect_interval = "30s"
+
 # Default duration to stay awake when a wake signal is received
 default_duration = "30m"
