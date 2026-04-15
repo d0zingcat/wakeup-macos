@@ -20,3 +20,5 @@ worker/node_modules/
 worker/.wrangler/
 worker/bun.lock
 worker/bun.lockb
+worker/wrangler.toml
+!worker/wrangler.toml.example

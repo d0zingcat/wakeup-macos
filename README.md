@@ -80,9 +80,10 @@ Add the following to your configuration file in your kv_namespaces array:
 { binding = "WAKEUP_KV", id = "a1b2c3d4e5f6g7h8i9j0..." }
 ```
 
-Edit `wrangler.toml` — replace the KV namespace ID and set a random auth token:
+Copy the example config and fill in your values:
 
 ```bash
+cp wrangler.toml.example wrangler.toml
 vim wrangler.toml
 ```
 
