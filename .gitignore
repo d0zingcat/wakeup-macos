@@ -1,0 +1,21 @@
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+bin/
+dist/
+.DS_Store
+/wakeup
+
+# Config (may contain secrets)
+/etc/wakeup/
+config.toml
+!config.example.toml
+
+# Worker
+worker/node_modules/
+worker/.wrangler/
+worker/bun.lockb

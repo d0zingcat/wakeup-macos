@@ -1,0 +1,19 @@
+# Wakeup daemon configuration
+# Copy to /etc/wakeup/config.toml (for daemon) or ~/.config/wakeup/config.toml (for CLI)
+
+# Cloudflare Worker URL (without trailing slash)
+worker_url = "https://wakeup-worker.YOUR_SUBDOMAIN.workers.dev"
+
+# Auth token (must match AUTH_TOKEN in wrangler.toml)
+token = "CHANGE_ME_TO_A_RANDOM_TOKEN"
+
+# Unique device identifier for this Mac
+# Examples: "office", "home-mini", "home-mbp"
+device_id = "my-mac"
+
+# How often to check for wake signals (daemon only)
+# This also determines the max wake latency
+check_interval = "15m"
+
+# Default duration to stay awake when a wake signal is received
+default_duration = "30m"

@@ -1,0 +1,226 @@
+# wakeup-macos
+
+Remotely wake your sleeping Mac via Cloudflare Workers — no VPN, no extra hardware.
+
+## Problem
+
+When your Mac sleeps, Tailscale (WireGuard) disconnects. Without a local network VPN, you can't use Wake-on-LAN to bring it back. But you also don't want to disable sleep entirely — that wears out your hardware.
+
+## How It Works
+
+```
+You (phone/laptop)                    Cloudflare Worker              Your Mac (sleeping)
+       |                                     |                              |
+       |  wakeup send office                 |                              |
+       | ----------------------------------> |                              |
+       |        store wake signal in KV      |                              |
+       |                                     |     (pmset wakes Mac every   |
+       |                                     |      15 min via hardware RTC)|
+       |                                     |                              |
+       |                                     | <--- GET /check/office ------|
+       |                                     | --- wake signal found! ----> |
+       |                                     |                              |
+       |                                     |     caffeinate keeps Mac     |
+       |                                     |     awake for 30 min        |
+       |                                     |     Tailscale reconnects     |
+       |                                     |                              |
+       |  ssh / remote desktop works now     |                              |
+       | <=============================================================> |
+```
+
+1. A lightweight daemon runs on your Mac, managed by launchd
+2. When the Mac sleeps, `pmset relative wake` schedules a hardware RTC wake every 15 minutes
+3. On each wake, the daemon checks a Cloudflare Worker for a wake signal
+4. If a signal is found, `caffeinate` keeps the Mac awake for the requested duration (default 30 min)
+5. Tailscale reconnects automatically, and you can access your Mac remotely
+6. When the duration expires, the Mac goes back to sleep naturally
+
+## Features
+
+- **No extra hardware** — pure software solution using macOS native tools (`pmset`, `caffeinate`)
+- **Multi-device support** — manage multiple Macs with unique device IDs, wake them individually or all at once
+- **Minimal power impact** — Mac wakes briefly every 15 min to check, then sleeps again if no signal
+- **Interactive installer** — guided setup with config generation
+- **Single binary** — daemon and CLI in one Go binary
+
+## Prerequisites
+
+- macOS (Apple Silicon or Intel)
+- [Go](https://go.dev/) 1.21+ (to build)
+- [Bun](https://bun.sh/) (to deploy the Cloudflare Worker)
+- A free [Cloudflare](https://cloudflare.com/) account
+
+## Quick Start
+
+### 1. Deploy the Cloudflare Worker
+
+```bash
+cd worker
+bun install
+
+# Edit wrangler.toml: set a random AUTH_TOKEN and your KV namespace ID
+# Create a KV namespace: bunx wrangler kv namespace create WAKEUP_KV
+vim wrangler.toml
+
+bun run deploy
+```
+
+Note the deployed URL (e.g. `https://wakeup-worker.your-subdomain.workers.dev`).
+
+### 2. Build and Install on Your Mac
+
+```bash
+make build
+sudo ./wakeup install
+```
+
+The interactive installer will guide you through:
+
+```
+=== wakeup-macos installer ===
+
+  Cloudflare Worker URL []: https://wakeup-worker.your-subdomain.workers.dev
+  Auth token [a1b2c3d4e5f6...]: (press Enter to use generated token)
+  Device ID for this Mac [your-hostname]: office
+  Check interval [15m]:
+  Default wake duration [30m]:
+
+--- Configuration Summary ---
+  Worker URL:     https://wakeup-worker.your-subdomain.workers.dev
+  Token:          a1b2c3d4e5f6...
+  Device ID:      office
+  Check interval: 15m
+  Wake duration:  30m
+
+  Proceed with installation? [y]:
+```
+
+> **Important:** Use the same `AUTH_TOKEN` value in both `wrangler.toml` and the installer prompt.
+
+### 3. Wake Your Mac Remotely
+
+From any device with the `wakeup` binary and config:
+
+```bash
+# Wake a specific Mac
+wakeup send office
+
+# Wake with custom duration
+wakeup send office 1h
+
+# Wake all Macs
+wakeup send --all
+
+# Check status
+wakeup status
+
+# List registered devices
+wakeup devices
+```
+
+Or use curl directly:
+
+```bash
+curl -X POST https://wakeup-worker.your-subdomain.workers.dev/YOUR_TOKEN/wake/office \
+  -H 'Content-Type: application/json' \
+  -d '{"duration": 3600}'
+```
+
+## CLI Reference
+
+```
+wakeup daemon                       Run the wake-check daemon (foreground)
+wakeup send <device_id> [duration]  Send wake signal to a device (default: 30m)
+wakeup send --all [duration]        Send wake signal to all devices
+wakeup status                       Show status of all devices
+wakeup devices                      List registered devices
+wakeup install                      Install as launchd daemon (requires sudo)
+wakeup uninstall                    Uninstall launchd daemon (requires sudo)
+wakeup version                      Print version
+```
+
+## Configuration
+
+Config file location: `/etc/wakeup/config.toml` (daemon) or `~/.config/wakeup/config.toml` (CLI).
+
+```toml
+worker_url = "https://wakeup-worker.your-subdomain.workers.dev"
+token = "your-auth-token"
+device_id = "office"
+check_interval = "15m"
+default_duration = "30m"
+```
+
+All values can be overridden with environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `WAKEUP_WORKER_URL` | Cloudflare Worker URL |
+| `WAKEUP_TOKEN` | Auth token |
+| `WAKEUP_DEVICE_ID` | Device identifier |
+| `WAKEUP_CHECK_INTERVAL` | Check interval (e.g. `10m`) |
+| `WAKEUP_DEFAULT_DURATION` | Default wake duration (e.g. `1h`) |
+
+## Worker API
+
+All endpoints require the auth token as the first path segment.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/{token}/wake/{device_id}` | Send wake signal to a device |
+| `POST` | `/{token}/wake?all=true` | Send wake signal to all devices |
+| `GET` | `/{token}/check/{device_id}` | Check and consume wake signal (daemon use) |
+| `GET` | `/{token}/status` | Status of all devices |
+| `GET` | `/{token}/devices` | List registered devices |
+
+POST body (optional): `{"duration": 1800}` (seconds, default 1800 = 30 min)
+
+## How the Wake Chain Works
+
+```
+Mac sleeps
+  → pmset relative wake 900 (scheduled before sleep)
+  → 15 min later: hardware RTC wakes Mac (FullWake)
+  → daemon checks Cloudflare KV
+  → no signal? schedule next wake, Mac sleeps again
+  → signal found? caffeinate -s -t N keeps Mac awake
+  → Tailscale reconnects (~1-5 sec)
+  → duration expires → caffeinate exits → Mac sleeps naturally
+  → cycle continues
+```
+
+The chain is self-healing: if it breaks (crash, reboot), launchd restarts the daemon, which immediately schedules the next wake.
+
+## Uninstall
+
+```bash
+sudo wakeup uninstall
+```
+
+This stops the daemon, removes the binary and launchd plist, clears the pmset repeat schedule, and optionally removes the config file.
+
+## Development
+
+```bash
+# Build
+make build
+
+# Run tests
+make test
+
+# Run daemon in foreground (dev mode)
+make dev
+
+# Deploy worker
+make deploy-worker
+```
+
+## Limitations
+
+- **Max 15 min wake latency** — the Mac checks every 15 minutes by default. You can lower this (e.g. `5m`) at the cost of slightly more power usage.
+- **Requires AC power** — `pmset relative wake` and `caffeinate -s` work most reliably on AC power. Battery behavior varies.
+- **Not instant** — if you need sub-second wake, you need a LAN relay device with Wake-on-LAN (see [tailscale-wakeonlan](https://github.com/andygrundman/tailscale-wakeonlan)).
+
+## License
+
+MIT

@@ -1,0 +1,10 @@
+name = "wakeup-worker"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+[[kv_namespaces]]
+binding = "WAKEUP_KV"
+id = "YOUR_KV_NAMESPACE_ID"
+
+[vars]
+AUTH_TOKEN = "CHANGE_ME_TO_A_RANDOM_TOKEN"
