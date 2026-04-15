@@ -20,6 +20,8 @@ type Daemon struct {
 	sessionDone chan *power.Session
 	lastCheck   time.Time
 	onACPower   bool
+	// darkwake detection (Phase 2) — wall clock only, no monotonic
+	lastWallTime time.Time
 }
 
 func New(cfg *config.Config) *Daemon {
@@ -32,8 +34,8 @@ func New(cfg *config.Config) *Daemon {
 }
 
 func (d *Daemon) Run() error {
-	log.Printf("wakeup daemon starting (device=%s, ac_interval=%s, battery_interval=%s)",
-		d.cfg.DeviceID, d.cfg.ACCheckInterval, d.cfg.BatteryCheckInterval)
+	log.Printf("wakeup daemon starting (device=%s, ac_interval=%s, battery_interval=%s, darkwake=%v)",
+		d.cfg.DeviceID, d.cfg.ACCheckInterval, d.cfg.BatteryCheckInterval, d.cfg.EnableDarkwakeDetection)
 
 	// Clean up any orphaned caffeinate processes from previous runs
 	power.CleanOrphanCaffeinate()
@@ -54,6 +56,17 @@ func (d *Daemon) Run() error {
 	ticker := time.NewTicker(d.cfg.ACCheckInterval)
 	defer ticker.Stop()
 
+	// Darkwake detection: fast ticker using wall clock jump detection
+	var wakeTicker *time.Ticker
+	var wakeTickerC <-chan time.Time
+	if d.cfg.EnableDarkwakeDetection {
+		log.Printf("darkwake detection enabled (interval=%s)", d.cfg.WakeDetectInterval)
+		wakeTicker = time.NewTicker(d.cfg.WakeDetectInterval)
+		wakeTickerC = wakeTicker.C
+		d.lastWallTime = wallNow()
+		defer wakeTicker.Stop()
+	}
+
 	// Run first check immediately
 	d.check(ctx)
 
@@ -69,6 +82,20 @@ func (d *Daemon) Run() error {
 				continue
 			}
 			d.check(ctx)
+
+		case <-wakeTickerC:
+			now := wallNow()
+			elapsed := now.Sub(d.lastWallTime)
+			d.lastWallTime = now
+
+			// Time jump detected — system just woke from sleep
+			if elapsed > d.cfg.WakeDetectInterval*2 {
+				log.Printf("darkwake detected (wall clock jumped %s)", elapsed.Truncate(time.Second))
+				// Only check if enough time passed since last check
+				if time.Since(d.lastCheck) > d.cfg.WakeDetectInterval {
+					d.check(ctx)
+				}
+			}
 
 		case sess := <-d.sessionDone:
 			// Only act if this is still the current session
@@ -167,4 +194,12 @@ func (d *Daemon) powerStateStr() string {
 		return "AC"
 	}
 	return "battery"
+}
+
+// wallNow returns the current time with the monotonic clock reading stripped.
+// This is critical for detecting sleep/wake: Go's monotonic clock stops during
+// macOS sleep, so time.Since() won't show the jump. Wall clock does.
+// See: https://github.com/golang/go/issues/36141
+func wallNow() time.Time {
+	return time.Now().Round(0)
 }

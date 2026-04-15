@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-04-15
+
+### Added
+
+- Darkwake detection (experimental): opt-in `enable_darkwake_detection` config flag
+- When enabled, daemon detects system wake events (including darkwake) via wall clock time jumps
+- Opportunistic signal checks during darkwake can reduce effective latency to ~45-120 seconds
+- New config fields: `enable_darkwake_detection` (default false), `wake_detect_interval` (default 30s)
+- Uses `time.Now().Round(0)` (wall clock) instead of monotonic clock — Go's monotonic clock stops during macOS sleep
+
 ## [0.2.0] - 2026-04-15
 
 ### Added
@@ -58,6 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Detailed Worker deployment guide
 - Example config files `config.example.toml` and `wrangler.toml.example`
 
+[0.2.1]: https://github.com/d0zingcat/wakeup-macos/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/d0zingcat/wakeup-macos/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/d0zingcat/wakeup-macos/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/d0zingcat/wakeup-macos/releases/tag/v0.1.0
