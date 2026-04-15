@@ -162,18 +162,43 @@ func runStatus() {
 		return
 	}
 
+	// Consider a device "online" if last seen within 2x check interval
+	onlineThreshold := cfg.CheckInterval * 2
+	var online, offline, pending int
+
 	for id, s := range status {
-		wake := "idle"
-		if s.PendingWake {
-			wake = "PENDING WAKE"
+		state := "offline"
+		if s.LastSeen > 0 {
+			since := time.Since(time.UnixMilli(s.LastSeen))
+			if since < onlineThreshold {
+				state = "online"
+				online++
+			} else {
+				offline++
+			}
+		} else {
+			offline++
 		}
+
+		if s.PendingWake {
+			state += " | PENDING WAKE"
+			pending++
+		}
+
 		lastSeen := "never"
 		if s.LastSeen > 0 {
 			t := time.UnixMilli(s.LastSeen)
 			lastSeen = time.Since(t).Truncate(time.Second).String() + " ago"
 		}
-		fmt.Printf("  %-20s  %s  (last seen: %s)\n", id, wake, lastSeen)
+		fmt.Printf("  %-20s  %-25s  (last seen: %s)\n", id, state, lastSeen)
 	}
+
+	fmt.Println()
+	fmt.Printf("  %d online, %d offline, %d total", online, offline, len(status))
+	if pending > 0 {
+		fmt.Printf(", %d pending wake", pending)
+	}
+	fmt.Println()
 }
 
 func runDevices() {

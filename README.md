@@ -57,15 +57,68 @@ You (phone/laptop)                    Cloudflare Worker              Your Mac (s
 ```bash
 cd worker
 bun install
+```
 
-# Edit wrangler.toml: set a random AUTH_TOKEN and your KV namespace ID
-# Create a KV namespace: bunx wrangler kv namespace create WAKEUP_KV
+Login to Cloudflare (opens browser for authorization):
+
+```bash
+bunx wrangler login
+```
+
+Create a KV namespace (Cloudflare Workers KV is a key-value store used to hold wake signals, you need to create a namespace first via wrangler CLI):
+
+```bash
+bunx wrangler kv namespace create WAKEUP_KV
+```
+
+This outputs something like:
+
+```
+🌀 Creating namespace with title "wakeup-worker-WAKEUP_KV"
+✨ Success!
+Add the following to your configuration file in your kv_namespaces array:
+{ binding = "WAKEUP_KV", id = "a1b2c3d4e5f6g7h8i9j0..." }
+```
+
+Edit `wrangler.toml` — replace the KV namespace ID and set a random auth token:
+
+```bash
 vim wrangler.toml
+```
 
+```toml
+[[kv_namespaces]]
+binding = "WAKEUP_KV"
+id = "a1b2c3d4e5f6g7h8i9j0..."  # paste your ID from above
+
+[vars]
+AUTH_TOKEN = "your-random-token"  # generate one: openssl rand -hex 16
+```
+
+Deploy:
+
+```bash
 bun run deploy
 ```
 
-Note the deployed URL (e.g. `https://wakeup-worker.your-subdomain.workers.dev`).
+Output:
+
+```
+Published wakeup-worker (x.xx sec)
+  https://wakeup-worker.your-subdomain.workers.dev
+```
+
+Verify it works:
+
+```bash
+# Wrong token → 404
+curl https://wakeup-worker.your-subdomain.workers.dev/wrong-token/status
+
+# Correct token → {"devices":{}}
+curl https://wakeup-worker.your-subdomain.workers.dev/your-random-token/status
+```
+
+Save the Worker URL and token — you'll need both when installing the daemon.
 
 ### 2. Build and Install on Your Mac
 
@@ -111,11 +164,21 @@ wakeup send office 1h
 # Wake all Macs
 wakeup send --all
 
-# Check status
+# Check device status (online/offline/pending wake)
 wakeup status
 
 # List registered devices
 wakeup devices
+```
+
+Example `wakeup status` output:
+
+```
+  office               online                     (last seen: 3m12s ago)
+  home-mini            offline                    (last seen: 2h15m ago)
+  home-mbp             online | PENDING WAKE      (last seen: 1m5s ago)
+
+  2 online, 1 offline, 3 total, 1 pending wake
 ```
 
 Or use curl directly:

@@ -18,4 +18,5 @@ config.toml
 # Worker
 worker/node_modules/
 worker/.wrangler/
+worker/bun.lock
 worker/bun.lockb
