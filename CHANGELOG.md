@@ -5,26 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-04-15
+
+### Changed
+
+- Config lookup now prefers user directory (`~/.config/wakeup/config.toml`) over system directory (`/etc/wakeup/config.toml`), so CLI commands like `send`, `status`, `devices` no longer require sudo
+- `install` command now writes config to both user and system paths; user config file ownership is corrected via `SUDO_UID`/`SUDO_GID`
+- Installation summary now shows both config paths (daemon and user)
+
 ## [0.1.0] - 2026-04-15
 
 ### Added
 
-- macOS 远程唤醒守护进程，通过 Cloudflare Workers 实现远程唤醒
-- 使用 `pmset relative wake` 定时硬件 RTC 唤醒（默认每 15 分钟）
-- 唤醒后通过 Cloudflare Worker（KV 存储）检查唤醒信号
-- 收到信号后使用 `caffeinate` 保持 Mac 唤醒指定时长（默认 30 分钟）
-- CLI 命令支持：`daemon`、`send`、`status`、`devices`、`install`、`uninstall`、`version`
-- Cloudflare Worker 端点：wake/check/status/devices
-- 设备在线/离线状态查询功能
-- TOML 配置文件支持，兼容环境变量覆盖
-- `launchd` plist 配置，支持系统级守护进程管理
-- Makefile 构建系统（build、test、install、dev、deploy-worker、clean）
-- 快速安装脚本 `scripts/install.sh`
+- Remote wake daemon for macOS via Cloudflare Workers
+- Scheduled hardware RTC wake using `pmset relative wake` (default every 15 minutes)
+- Wake signal check through Cloudflare Worker (KV storage) after each wake
+- `caffeinate` session to keep Mac awake for a specified duration upon receiving signal (default 30 minutes)
+- CLI commands: `daemon`, `send`, `status`, `devices`, `install`, `uninstall`, `version`
+- Cloudflare Worker endpoints: wake/check/status/devices
+- Device online/offline status query
+- TOML config file with environment variable overrides
+- `launchd` plist for system-level daemon management
+- Makefile build system (build, test, install, dev, deploy-worker, clean)
+- Quick install script `scripts/install.sh`
 
 ### Documentation
 
-- 完整的 README 文档，包含安装、配置、使用说明
-- Worker 部署详细指南
-- 示例配置文件 `config.example.toml` 和 `wrangler.toml.example`
+- Full README with installation, configuration, and usage instructions
+- Detailed Worker deployment guide
+- Example config files `config.example.toml` and `wrangler.toml.example`
 
+[0.1.1]: https://github.com/d0zingcat/wakeup-macos/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/d0zingcat/wakeup-macos/releases/tag/v0.1.0
