@@ -2,6 +2,7 @@ package cloud
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -41,11 +42,11 @@ func NewClient(baseURL, token string) *Client {
 }
 
 // Check reads and clears the wake signal for a device.
-func (c *Client) Check(deviceID string) (*WakeSignal, error) {
+func (c *Client) Check(ctx context.Context, deviceID string) (*WakeSignal, error) {
 	url := fmt.Sprintf("%s/%s/check/%s", c.baseURL, c.token, deviceID)
 
 	var signal WakeSignal
-	err := c.doWithRetry("GET", url, nil, &signal)
+	err := c.doWithRetry(ctx, "GET", url, nil, &signal)
 	if err != nil {
 		return nil, err
 	}
@@ -57,27 +58,27 @@ func (c *Client) Check(deviceID string) (*WakeSignal, error) {
 }
 
 // Send sends a wake signal to a specific device.
-func (c *Client) Send(deviceID string, duration time.Duration) error {
+func (c *Client) Send(ctx context.Context, deviceID string, duration time.Duration) error {
 	url := fmt.Sprintf("%s/%s/wake/%s", c.baseURL, c.token, deviceID)
 	body := map[string]int{"duration": int(duration.Seconds())}
-	return c.doWithRetry("POST", url, body, nil)
+	return c.doWithRetry(ctx, "POST", url, body, nil)
 }
 
 // SendAll sends a wake signal to all registered devices.
-func (c *Client) SendAll(duration time.Duration) error {
+func (c *Client) SendAll(ctx context.Context, duration time.Duration) error {
 	url := fmt.Sprintf("%s/%s/wake?all=true", c.baseURL, c.token)
 	body := map[string]int{"duration": int(duration.Seconds())}
-	return c.doWithRetry("POST", url, body, nil)
+	return c.doWithRetry(ctx, "POST", url, body, nil)
 }
 
 // Status returns the status of all devices.
-func (c *Client) Status() (map[string]DeviceStatus, error) {
+func (c *Client) Status(ctx context.Context) (map[string]DeviceStatus, error) {
 	url := fmt.Sprintf("%s/%s/status", c.baseURL, c.token)
 
 	var resp struct {
 		Devices map[string]DeviceStatus `json:"devices"`
 	}
-	err := c.doWithRetry("GET", url, nil, &resp)
+	err := c.doWithRetry(ctx, "GET", url, nil, &resp)
 	if err != nil {
 		return nil, err
 	}
@@ -85,34 +86,41 @@ func (c *Client) Status() (map[string]DeviceStatus, error) {
 }
 
 // Devices returns all registered devices.
-func (c *Client) Devices() (map[string]DeviceInfo, error) {
+func (c *Client) Devices(ctx context.Context) (map[string]DeviceInfo, error) {
 	url := fmt.Sprintf("%s/%s/devices", c.baseURL, c.token)
 
 	var resp struct {
 		Devices map[string]DeviceInfo `json:"devices"`
 	}
-	err := c.doWithRetry("GET", url, nil, &resp)
+	err := c.doWithRetry(ctx, "GET", url, nil, &resp)
 	if err != nil {
 		return nil, err
 	}
 	return resp.Devices, nil
 }
 
-func (c *Client) doWithRetry(method, url string, reqBody any, result any) error {
+func (c *Client) doWithRetry(ctx context.Context, method, url string, reqBody any, result any) error {
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
-			time.Sleep(2 * time.Second)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
 		}
-		lastErr = c.do(method, url, reqBody, result)
+		lastErr = c.do(ctx, method, url, reqBody, result)
 		if lastErr == nil {
 			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 	}
 	return fmt.Errorf("after 3 attempts: %w", lastErr)
 }
 
-func (c *Client) do(method, url string, reqBody any, result any) error {
+func (c *Client) do(ctx context.Context, method, url string, reqBody any, result any) error {
 	var bodyReader io.Reader
 	if reqBody != nil {
 		data, err := json.Marshal(reqBody)
@@ -122,7 +130,7 @@ func (c *Client) do(method, url string, reqBody any, result any) error {
 		bodyReader = bytes.NewReader(data)
 	}
 
-	req, err := http.NewRequest(method, url, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}

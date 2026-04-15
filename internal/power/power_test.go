@@ -54,3 +54,46 @@ func TestKeepAwake_NaturalExpiry(t *testing.T) {
 		t.Fatal("session did not expire naturally")
 	}
 }
+
+func TestParseACPower(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		wantAC bool
+	}{
+		{
+			name:   "AC power",
+			input:  "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1234)\t100%; charged; 0:00 remaining present: true",
+			wantAC: true,
+		},
+		{
+			name:   "Battery power",
+			input:  "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1234)\t85%; discharging; 3:45 remaining present: true",
+			wantAC: false,
+		},
+		{
+			name:   "empty string",
+			input:  "",
+			wantAC: true,
+		},
+		{
+			name:   "unexpected format",
+			input:  "Something unexpected from UPS",
+			wantAC: true,
+		},
+		{
+			name:   "AC power with extra whitespace",
+			input:  "Now drawing from 'AC Power'\n",
+			wantAC: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseACPower(tt.input)
+			if got != tt.wantAC {
+				t.Errorf("parseACPower(%q) = %v, want %v", tt.input, got, tt.wantAC)
+			}
+		})
+	}
+}

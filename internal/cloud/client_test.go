@@ -1,6 +1,7 @@
 package cloud
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -17,8 +18,9 @@ func TestCheck_WithSignal(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	ctx := context.Background()
 	c := NewClient(srv.URL, "testtoken")
-	sig, err := c.Check("office")
+	sig, err := c.Check(ctx, "office")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -36,8 +38,9 @@ func TestCheck_NoSignal(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	ctx := context.Background()
 	c := NewClient(srv.URL, "testtoken")
-	sig, err := c.Check("office")
+	sig, err := c.Check(ctx, "office")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -57,7 +60,7 @@ func TestSend(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "tok")
-	err := c.Send("office", 30*time.Minute)
+	err := c.Send(context.Background(), "office", 30*time.Minute)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -78,7 +81,7 @@ func TestSendAll(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "tok")
-	err := c.SendAll(30 * time.Minute)
+	err := c.SendAll(context.Background(), 30*time.Minute)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -99,7 +102,7 @@ func TestDevices(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "tok")
-	devs, err := c.Devices()
+	devs, err := c.Devices(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -116,7 +119,7 @@ func TestCheck_404(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "badtoken")
-	_, err := c.Check("office")
+	_, err := c.Check(context.Background(), "office")
 	if err == nil {
 		t.Fatal("expected error for 404")
 	}
@@ -136,7 +139,7 @@ func TestCheck_Retry(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "tok")
-	sig, err := c.Check("office")
+	sig, err := c.Check(context.Background(), "office")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,5 +148,29 @@ func TestCheck_Retry(t *testing.T) {
 	}
 	if attempts != 3 {
 		t.Errorf("expected 3 attempts, got %d", attempts)
+	}
+}
+
+func TestCheck_ContextCancelled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Slow response to allow cancellation
+		time.Sleep(2 * time.Second)
+		json.NewEncoder(w).Encode(WakeSignal{Wake: true, Duration: 600})
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	c := NewClient(srv.URL, "tok")
+	start := time.Now()
+	_, err := c.Check(ctx, "office")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error from cancelled context")
+	}
+	if elapsed > 1*time.Second {
+		t.Errorf("expected fast cancellation, took %s", elapsed)
 	}
 }

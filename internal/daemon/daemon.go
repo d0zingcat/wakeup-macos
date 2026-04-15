@@ -14,25 +14,32 @@ import (
 )
 
 type Daemon struct {
-	cfg     *config.Config
-	client  *cloud.Client
-	session *power.Session
+	cfg         *config.Config
+	client      *cloud.Client
+	session     *power.Session
+	sessionDone chan *power.Session
+	lastCheck   time.Time
+	onACPower   bool
 }
 
 func New(cfg *config.Config) *Daemon {
 	return &Daemon{
-		cfg:    cfg,
-		client: cloud.NewClient(cfg.WorkerURL, cfg.Token),
+		cfg:         cfg,
+		client:      cloud.NewClient(cfg.WorkerURL, cfg.Token),
+		sessionDone: make(chan *power.Session, 1),
+		onACPower:   true, // assume AC until first check
 	}
 }
 
 func (d *Daemon) Run() error {
-	log.Printf("wakeup daemon starting (device=%s, interval=%s)", d.cfg.DeviceID, d.cfg.CheckInterval)
+	log.Printf("wakeup daemon starting (device=%s, ac_interval=%s, battery_interval=%s)",
+		d.cfg.DeviceID, d.cfg.ACCheckInterval, d.cfg.BatteryCheckInterval)
 
 	// Clean up any orphaned caffeinate processes from previous runs
 	power.CleanOrphanCaffeinate()
 
-	// Schedule the next wake immediately
+	// Detect initial power state and schedule first wake
+	d.onACPower = power.IsOnACPower()
 	d.scheduleNextWake()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -42,44 +49,67 @@ func (d *Daemon) Run() error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 
-	ticker := time.NewTicker(d.cfg.CheckInterval)
+	// Use the shorter AC interval as the ticker base.
+	// On battery, we skip checks that are too soon (throttle via lastCheck).
+	ticker := time.NewTicker(d.cfg.ACCheckInterval)
 	defer ticker.Stop()
 
 	// Run first check immediately
-	d.check()
+	d.check(ctx)
 
 	for {
 		select {
 		case <-ticker.C:
-			d.check()
-		case <-ctx.Done():
-			d.shutdown()
-			return nil
+			d.onACPower = power.IsOnACPower()
+			interval := d.currentInterval()
+			d.scheduleNextWake()
+
+			// On battery, skip if we checked too recently
+			if !d.onACPower && time.Since(d.lastCheck) < interval {
+				continue
+			}
+			d.check(ctx)
+
+		case sess := <-d.sessionDone:
+			// Only act if this is still the current session
+			if sess == d.session {
+				log.Printf("caffeinate session ended, scheduling next wake")
+				d.session = nil
+				d.scheduleNextWake()
+			}
+
 		case sig := <-sigCh:
 			log.Printf("received signal %v, shutting down", sig)
+			cancel()
 			d.shutdown()
 			return nil
 		}
 	}
 }
 
-func (d *Daemon) check() {
-	log.Printf("checking for wake signal (device=%s)", d.cfg.DeviceID)
+func (d *Daemon) check(ctx context.Context) {
+	log.Printf("checking for wake signal (device=%s, power=%s)",
+		d.cfg.DeviceID, d.powerStateStr())
 
-	signal, err := d.client.Check(d.cfg.DeviceID)
+	sig, err := d.client.Check(ctx, d.cfg.DeviceID)
 	if err != nil {
+		if ctx.Err() != nil {
+			return // shutting down, don't log
+		}
 		log.Printf("check failed (will retry next cycle): %v", err)
-		d.scheduleNextWake()
+		d.lastCheck = time.Now()
 		return
 	}
 
-	if signal == nil {
+	d.lastCheck = time.Now()
+
+	if sig == nil {
 		log.Printf("no wake signal, scheduling next wake")
 		d.scheduleNextWake()
 		return
 	}
 
-	duration := time.Duration(signal.Duration) * time.Second
+	duration := time.Duration(sig.Duration) * time.Second
 	if duration < 1*time.Minute {
 		duration = d.cfg.DefaultDuration
 	}
@@ -101,17 +131,23 @@ func (d *Daemon) check() {
 	}
 	d.session = session
 
-	// Monitor the session in background
+	// Monitor the session in background — notify via channel, not direct mutation
 	go func() {
 		<-session.Done()
-		log.Printf("caffeinate session ended, scheduling next wake")
-		d.session = nil
-		d.scheduleNextWake()
+		d.sessionDone <- session
 	}()
 }
 
+func (d *Daemon) currentInterval() time.Duration {
+	if d.onACPower {
+		return d.cfg.ACCheckInterval
+	}
+	return d.cfg.BatteryCheckInterval
+}
+
 func (d *Daemon) scheduleNextWake() {
-	if err := power.ScheduleNextWake(d.cfg.CheckInterval); err != nil {
+	interval := d.currentInterval()
+	if err := power.ScheduleNextWake(interval); err != nil {
 		log.Printf("failed to schedule next wake: %v", err)
 		log.Printf("the system may not wake automatically — will retry on next check")
 	}
@@ -124,4 +160,11 @@ func (d *Daemon) shutdown() {
 		d.session = nil
 	}
 	log.Printf("daemon stopped")
+}
+
+func (d *Daemon) powerStateStr() string {
+	if d.onACPower {
+		return "AC"
+	}
+	return "battery"
 }

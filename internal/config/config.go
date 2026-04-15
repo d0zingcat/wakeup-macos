@@ -10,16 +10,20 @@ import (
 )
 
 type Config struct {
-	WorkerURL       string        `toml:"worker_url"`
-	Token           string        `toml:"token"`
-	DeviceID        string        `toml:"device_id"`
-	CheckInterval   time.Duration `toml:"check_interval"`
-	DefaultDuration time.Duration `toml:"default_duration"`
+	WorkerURL            string        `toml:"worker_url"`
+	Token                string        `toml:"token"`
+	DeviceID             string        `toml:"device_id"`
+	CheckInterval        time.Duration `toml:"check_interval"`
+	DefaultDuration      time.Duration `toml:"default_duration"`
+	ACCheckInterval      time.Duration `toml:"ac_check_interval"`
+	BatteryCheckInterval time.Duration `toml:"battery_check_interval"`
 }
 
 var defaults = Config{
-	CheckInterval:   15 * time.Minute,
-	DefaultDuration: 30 * time.Minute,
+	CheckInterval:        15 * time.Minute,
+	DefaultDuration:      30 * time.Minute,
+	ACCheckInterval:      2 * time.Minute,
+	BatteryCheckInterval: 15 * time.Minute,
 }
 
 func Load() (*Config, error) {
@@ -60,6 +64,22 @@ func Load() (*Config, error) {
 			cfg.DefaultDuration = d
 		}
 	}
+	if v := os.Getenv("WAKEUP_AC_CHECK_INTERVAL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err == nil {
+			cfg.ACCheckInterval = d
+		}
+	}
+	if v := os.Getenv("WAKEUP_BATTERY_CHECK_INTERVAL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err == nil {
+			cfg.BatteryCheckInterval = d
+		}
+	}
+
+	// Resolve adaptive intervals: if user set check_interval but not the
+	// adaptive ones, inherit check_interval for both.
+	cfg.resolveIntervals(loaded)
 
 	if !loaded && cfg.WorkerURL == "" {
 		return nil, fmt.Errorf("no config file found (searched %v) and WAKEUP_WORKER_URL not set", paths)
@@ -85,7 +105,35 @@ func (c *Config) Validate() error {
 	if c.DefaultDuration < 1*time.Minute {
 		return fmt.Errorf("default_duration must be at least 1m")
 	}
+	if c.ACCheckInterval < 1*time.Minute {
+		return fmt.Errorf("ac_check_interval must be at least 1m")
+	}
+	if c.BatteryCheckInterval < 1*time.Minute {
+		return fmt.Errorf("battery_check_interval must be at least 1m")
+	}
 	return nil
+}
+
+// resolveIntervals applies inheritance logic for adaptive check intervals.
+// If the user explicitly set check_interval (different from default) but did not
+// set the adaptive intervals, both inherit check_interval.
+func (c *Config) resolveIntervals(fromFile bool) {
+	defaultCI := defaults.CheckInterval
+	defaultAC := defaults.ACCheckInterval
+	defaultBat := defaults.BatteryCheckInterval
+
+	ciChanged := c.CheckInterval != defaultCI
+	acChanged := c.ACCheckInterval != defaultAC
+	batChanged := c.BatteryCheckInterval != defaultBat
+
+	// If check_interval was explicitly changed but adaptive intervals were not,
+	// inherit check_interval for both.
+	if ciChanged && !acChanged {
+		c.ACCheckInterval = c.CheckInterval
+	}
+	if ciChanged && !batChanged {
+		c.BatteryCheckInterval = c.CheckInterval
+	}
 }
 
 func configPaths() []string {

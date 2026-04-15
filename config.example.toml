@@ -12,8 +12,14 @@ token = "CHANGE_ME_TO_A_RANDOM_TOKEN"
 device_id = "my-mac"
 
 # How often to check for wake signals (daemon only)
-# This also determines the max wake latency
+# This is the fallback interval; see ac/battery intervals below
 check_interval = "15m"
+
+# Adaptive check intervals based on power state (v0.2.0+)
+# On AC power: shorter interval for faster wake response
+ac_check_interval = "2m"
+# On battery: longer interval to preserve battery life
+battery_check_interval = "15m"
 
 # Default duration to stay awake when a wake signal is received
 default_duration = "30m"

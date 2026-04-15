@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-04-15
+
+### Added
+
+- Adaptive check intervals based on power state: shorter interval on AC power (default 2m), longer on battery (default 15m)
+- Power state detection via `pmset -g ps` (`IsOnACPower()`)
+- New config fields: `ac_check_interval`, `battery_check_interval` with environment variable overrides
+- `status` command now shows local power state and effective check interval
+- Context cancellation support for HTTP requests — daemon shuts down faster
+
+### Changed
+
+- Cloud client methods now accept `context.Context` for cancellation support
+- Daemon uses channel-based session management instead of direct goroutine mutation (fixes data race on `d.session`)
+- Session monitor goroutine no longer directly modifies daemon state — communicates via `sessionDone` channel
+- Install flow now prompts for AC and battery check intervals
+
+### Fixed
+
+- Data race on `d.session` between main goroutine and caffeinate session monitor goroutine
+- Session pointer aliasing: replacing a caffeinate session no longer risks orphaning the new session
+- `scheduleNextWake()` now uses current power state at call time, avoiding stale interval values
+
 ## [0.1.1] - 2026-04-15
 
 ### Changed
@@ -35,5 +58,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Detailed Worker deployment guide
 - Example config files `config.example.toml` and `wrangler.toml.example`
 
+[0.2.0]: https://github.com/d0zingcat/wakeup-macos/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/d0zingcat/wakeup-macos/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/d0zingcat/wakeup-macos/releases/tag/v0.1.0

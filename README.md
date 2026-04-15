@@ -29,7 +29,7 @@ You (phone/laptop)                    Cloudflare Worker              Your Mac (s
 ```
 
 1. A lightweight daemon runs on your Mac, managed by launchd
-2. When the Mac sleeps, `pmset relative wake` schedules a hardware RTC wake every 15 minutes
+2. When the Mac sleeps, `pmset relative wake` schedules a hardware RTC wake (every ~2 min on AC, ~15 min on battery)
 3. On each wake, the daemon checks a Cloudflare Worker for a wake signal
 4. If a signal is found, `caffeinate` keeps the Mac awake for the requested duration (default 30 min)
 5. Tailscale reconnects automatically, and you can access your Mac remotely
@@ -39,7 +39,7 @@ You (phone/laptop)                    Cloudflare Worker              Your Mac (s
 
 - **No extra hardware** — pure software solution using macOS native tools (`pmset`, `caffeinate`)
 - **Multi-device support** — manage multiple Macs with unique device IDs, wake them individually or all at once
-- **Minimal power impact** — Mac wakes briefly every 15 min to check, then sleeps again if no signal
+- **Minimal power impact** — adaptive intervals: ~2 min on AC power, 15 min on battery
 - **Interactive installer** — guided setup with config generation
 - **Single binary** — daemon and CLI in one Go binary
 
@@ -213,6 +213,8 @@ token = "your-auth-token"
 device_id = "office"
 check_interval = "15m"
 default_duration = "30m"
+ac_check_interval = "2m"        # check interval on AC power (v0.2.0+)
+battery_check_interval = "15m"  # check interval on battery (v0.2.0+)
 ```
 
 All values can be overridden with environment variables:
@@ -222,8 +224,10 @@ All values can be overridden with environment variables:
 | `WAKEUP_WORKER_URL` | Cloudflare Worker URL |
 | `WAKEUP_TOKEN` | Auth token |
 | `WAKEUP_DEVICE_ID` | Device identifier |
-| `WAKEUP_CHECK_INTERVAL` | Check interval (e.g. `10m`) |
+| `WAKEUP_CHECK_INTERVAL` | Fallback check interval (e.g. `10m`) |
 | `WAKEUP_DEFAULT_DURATION` | Default wake duration (e.g. `1h`) |
+| `WAKEUP_AC_CHECK_INTERVAL` | Check interval on AC power (e.g. `2m`) |
+| `WAKEUP_BATTERY_CHECK_INTERVAL` | Check interval on battery (e.g. `15m`) |
 
 ## Worker API
 
@@ -243,8 +247,8 @@ POST body (optional): `{"duration": 1800}` (seconds, default 1800 = 30 min)
 
 ```
 Mac sleeps
-  → pmset relative wake 900 (scheduled before sleep)
-  → 15 min later: hardware RTC wakes Mac (FullWake)
+  → pmset relative wake (120s on AC, 900s on battery)
+  → hardware RTC wakes Mac (FullWake)
   → daemon checks Cloudflare KV
   → no signal? schedule next wake, Mac sleeps again
   → signal found? caffeinate -s -t N keeps Mac awake
@@ -253,7 +257,7 @@ Mac sleeps
   → cycle continues
 ```
 
-The chain is self-healing: if it breaks (crash, reboot), launchd restarts the daemon, which immediately schedules the next wake.
+The daemon adapts its check interval based on power state — on AC power it checks every ~2 minutes (configurable), on battery every ~15 minutes. The chain is self-healing: if it breaks (crash, reboot), launchd restarts the daemon, which immediately schedules the next wake.
 
 ## Uninstall
 
@@ -281,8 +285,7 @@ make deploy-worker
 
 ## Limitations
 
-- **Max 15 min wake latency** — the Mac checks every 15 minutes by default. You can lower this (e.g. `5m`) at the cost of slightly more power usage.
-- **Requires AC power** — `pmset relative wake` and `caffeinate -s` work most reliably on AC power. Battery behavior varies.
+- **~2 min wake latency on AC** — the Mac checks every 2 minutes on AC power by default. On battery, the default is 15 minutes to preserve battery life. Both are configurable.
 - **Not instant** — if you need sub-second wake, you need a LAN relay device with Wake-on-LAN (see [tailscale-wakeonlan](https://github.com/andygrundman/tailscale-wakeonlan)).
 
 ## License

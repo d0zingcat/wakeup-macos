@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -126,15 +127,16 @@ func runSend() {
 		duration = d
 	}
 
+	ctx := context.Background()
 	if all {
-		err = client.SendAll(duration)
+		err = client.SendAll(ctx, duration)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "send failed: %v\n", err)
 			os.Exit(1)
 		}
 		fmt.Printf("Wake signal sent to all devices (duration: %s)\n", duration)
 	} else {
-		err = client.Send(deviceID, duration)
+		err = client.Send(ctx, deviceID, duration)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "send failed: %v\n", err)
 			os.Exit(1)
@@ -151,19 +153,30 @@ func runStatus() {
 	}
 
 	client := cloud.NewClient(cfg.WorkerURL, cfg.Token)
-	status, err := client.Status()
+	status, err := client.Status(context.Background())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "status failed: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Show local power state and effective interval
+	onAC := power.IsOnACPower()
+	powerStr := "battery"
+	effectiveInterval := cfg.BatteryCheckInterval
+	if onAC {
+		powerStr = "AC"
+		effectiveInterval = cfg.ACCheckInterval
+	}
+	fmt.Printf("  Local power: %s (check interval: %s)\n", powerStr, effectiveInterval)
+	fmt.Println()
 
 	if len(status) == 0 {
 		fmt.Println("No devices registered")
 		return
 	}
 
-	// Consider a device "online" if last seen within 2x check interval
-	onlineThreshold := cfg.CheckInterval * 2
+	// Consider a device "online" if last seen within 2x the longer interval
+	onlineThreshold := cfg.BatteryCheckInterval * 2
 	var online, offline, pending int
 
 	for id, s := range status {
@@ -209,7 +222,7 @@ func runDevices() {
 	}
 
 	client := cloud.NewClient(cfg.WorkerURL, cfg.Token)
-	devices, err := client.Devices()
+	devices, err := client.Devices(context.Background())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "devices failed: %v\n", err)
 		os.Exit(1)
@@ -260,7 +273,10 @@ token = %q
 device_id = %q
 check_interval = %q
 default_duration = %q
-`, cfg.WorkerURL, cfg.Token, cfg.DeviceID, cfg.CheckInterval.String(), cfg.DefaultDuration.String())
+ac_check_interval = %q
+battery_check_interval = %q
+`, cfg.WorkerURL, cfg.Token, cfg.DeviceID, cfg.CheckInterval.String(), cfg.DefaultDuration.String(),
+		cfg.ACCheckInterval.String(), cfg.BatteryCheckInterval.String())
 
 	fmt.Println()
 	// Write system config (for launchd daemon running as root)
@@ -344,10 +360,11 @@ default_duration = %q
 	fmt.Println()
 	fmt.Println("=== Installation complete ===")
 	fmt.Println()
-	fmt.Printf("  Device ID:      %s\n", cfg.DeviceID)
-	fmt.Printf("  Check interval: %s\n", cfg.CheckInterval)
-	fmt.Printf("  Wake duration:  %s\n", cfg.DefaultDuration)
-	fmt.Printf("  Config (daemon): %s\n", configPath)
+	fmt.Printf("  Device ID:        %s\n", cfg.DeviceID)
+	fmt.Printf("  AC interval:      %s\n", cfg.ACCheckInterval)
+	fmt.Printf("  Battery interval: %s\n", cfg.BatteryCheckInterval)
+	fmt.Printf("  Wake duration:    %s\n", cfg.DefaultDuration)
+	fmt.Printf("  Config (daemon):  %s\n", configPath)
 	fmt.Printf("  Config (user):   ~/.config/wakeup/config.toml\n")
 	fmt.Printf("  Logs:           /var/log/wakeup.log\n")
 	fmt.Println()
@@ -362,8 +379,10 @@ default_duration = %q
 
 func interactiveConfig() *config.Config {
 	cfg := &config.Config{
-		CheckInterval:   15 * time.Minute,
-		DefaultDuration: 30 * time.Minute,
+		CheckInterval:        15 * time.Minute,
+		DefaultDuration:      30 * time.Minute,
+		ACCheckInterval:      2 * time.Minute,
+		BatteryCheckInterval: 15 * time.Minute,
 	}
 
 	// Try loading existing config
@@ -453,14 +472,52 @@ func interactiveConfig() *config.Config {
 	)
 	cfg.DefaultDuration, _ = time.ParseDuration(durationStr)
 
+	// AC check interval
+	acIntervalStr := prompt(
+		"AC power check interval",
+		cfg.ACCheckInterval.String(),
+		"check interval when plugged in (e.g. 2m, 5m)",
+		func(s string) error {
+			d, err := time.ParseDuration(s)
+			if err != nil {
+				return err
+			}
+			if d < 1*time.Minute {
+				return fmt.Errorf("must be at least 1m")
+			}
+			return nil
+		},
+	)
+	cfg.ACCheckInterval, _ = time.ParseDuration(acIntervalStr)
+
+	// Battery check interval
+	batIntervalStr := prompt(
+		"Battery check interval",
+		cfg.BatteryCheckInterval.String(),
+		"check interval on battery (e.g. 15m, 30m)",
+		func(s string) error {
+			d, err := time.ParseDuration(s)
+			if err != nil {
+				return err
+			}
+			if d < 1*time.Minute {
+				return fmt.Errorf("must be at least 1m")
+			}
+			return nil
+		},
+	)
+	cfg.BatteryCheckInterval, _ = time.ParseDuration(batIntervalStr)
+
 	// Confirm
 	fmt.Println()
 	fmt.Println("--- Configuration Summary ---")
-	fmt.Printf("  Worker URL:     %s\n", cfg.WorkerURL)
-	fmt.Printf("  Token:          %s\n", cfg.Token)
-	fmt.Printf("  Device ID:      %s\n", cfg.DeviceID)
-	fmt.Printf("  Check interval: %s\n", cfg.CheckInterval)
-	fmt.Printf("  Wake duration:  %s\n", cfg.DefaultDuration)
+	fmt.Printf("  Worker URL:        %s\n", cfg.WorkerURL)
+	fmt.Printf("  Token:             %s\n", cfg.Token)
+	fmt.Printf("  Device ID:         %s\n", cfg.DeviceID)
+	fmt.Printf("  Check interval:    %s\n", cfg.CheckInterval)
+	fmt.Printf("  AC interval:       %s\n", cfg.ACCheckInterval)
+	fmt.Printf("  Battery interval:  %s\n", cfg.BatteryCheckInterval)
+	fmt.Printf("  Wake duration:     %s\n", cfg.DefaultDuration)
 	fmt.Println()
 
 	confirm := prompt("Proceed with installation?", "y", "[y/n]", nil)

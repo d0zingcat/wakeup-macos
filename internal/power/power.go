@@ -115,6 +115,29 @@ func ClearRepeatWake() error {
 	return nil
 }
 
+// IsOnACPower returns true if the Mac is currently on AC power.
+// Returns true on error (conservative default: use shorter interval).
+func IsOnACPower() bool {
+	out, err := exec.Command("pmset", "-g", "ps").Output()
+	if err != nil {
+		return true
+	}
+	return parseACPower(string(out))
+}
+
+// parseACPower parses the output of `pmset -g ps` and returns true if on AC power.
+// Returns true for empty/unexpected input (conservative default).
+func parseACPower(output string) bool {
+	if output == "" {
+		return true
+	}
+	firstLine := strings.SplitN(output, "\n", 2)[0]
+	if strings.Contains(firstLine, "Battery Power") {
+		return false
+	}
+	return true
+}
+
 // CleanOrphanCaffeinate kills any orphaned caffeinate processes from previous runs.
 func CleanOrphanCaffeinate() {
 	out, err := exec.Command("pgrep", "-f", "caffeinate -s -t").Output()
