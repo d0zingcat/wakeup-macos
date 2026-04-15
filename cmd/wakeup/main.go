@@ -275,8 +275,11 @@ check_interval = %q
 default_duration = %q
 ac_check_interval = %q
 battery_check_interval = %q
+enable_darkwake_detection = %v
+wake_detect_interval = %q
 `, cfg.WorkerURL, cfg.Token, cfg.DeviceID, cfg.CheckInterval.String(), cfg.DefaultDuration.String(),
-		cfg.ACCheckInterval.String(), cfg.BatteryCheckInterval.String())
+		cfg.ACCheckInterval.String(), cfg.BatteryCheckInterval.String(),
+		cfg.EnableDarkwakeDetection, cfg.WakeDetectInterval.String())
 
 	fmt.Println()
 	// Write system config (for launchd daemon running as root)
@@ -363,6 +366,7 @@ battery_check_interval = %q
 	fmt.Printf("  Device ID:        %s\n", cfg.DeviceID)
 	fmt.Printf("  AC interval:      %s\n", cfg.ACCheckInterval)
 	fmt.Printf("  Battery interval: %s\n", cfg.BatteryCheckInterval)
+	fmt.Printf("  Darkwake detect:  %v\n", cfg.EnableDarkwakeDetection)
 	fmt.Printf("  Wake duration:    %s\n", cfg.DefaultDuration)
 	fmt.Printf("  Config (daemon):  %s\n", configPath)
 	fmt.Printf("  Config (user):   ~/.config/wakeup/config.toml\n")
@@ -508,6 +512,40 @@ func interactiveConfig() *config.Config {
 	)
 	cfg.BatteryCheckInterval, _ = time.ParseDuration(batIntervalStr)
 
+	// Darkwake detection
+	darkwakeStr := prompt(
+		"Enable darkwake detection (experimental)",
+		boolToYN(cfg.EnableDarkwakeDetection),
+		"detect sleep/wake events for faster response [y/n]",
+		func(s string) error {
+			s = strings.ToLower(s)
+			if s != "y" && s != "n" && s != "yes" && s != "no" {
+				return fmt.Errorf("enter y or n")
+			}
+			return nil
+		},
+	)
+	cfg.EnableDarkwakeDetection = strings.HasPrefix(strings.ToLower(darkwakeStr), "y")
+
+	if cfg.EnableDarkwakeDetection {
+		wakeDetectStr := prompt(
+			"Wake detect interval",
+			cfg.WakeDetectInterval.String(),
+			"how often to check for time jumps (e.g. 30s, 1m)",
+			func(s string) error {
+				d, err := time.ParseDuration(s)
+				if err != nil {
+					return err
+				}
+				if d < 10*time.Second {
+					return fmt.Errorf("must be at least 10s")
+				}
+				return nil
+			},
+		)
+		cfg.WakeDetectInterval, _ = time.ParseDuration(wakeDetectStr)
+	}
+
 	// Confirm
 	fmt.Println()
 	fmt.Println("--- Configuration Summary ---")
@@ -517,6 +555,10 @@ func interactiveConfig() *config.Config {
 	fmt.Printf("  Check interval:    %s\n", cfg.CheckInterval)
 	fmt.Printf("  AC interval:       %s\n", cfg.ACCheckInterval)
 	fmt.Printf("  Battery interval:  %s\n", cfg.BatteryCheckInterval)
+	fmt.Printf("  Darkwake detect:   %v\n", cfg.EnableDarkwakeDetection)
+	if cfg.EnableDarkwakeDetection {
+		fmt.Printf("  Wake detect int:   %s\n", cfg.WakeDetectInterval)
+	}
 	fmt.Printf("  Wake duration:     %s\n", cfg.DefaultDuration)
 	fmt.Println()
 
@@ -658,4 +700,11 @@ func parseDuration(s string) (time.Duration, error) {
 		return time.Duration(n) * time.Minute, nil
 	}
 	return time.ParseDuration(s)
+}
+
+func boolToYN(b bool) string {
+	if b {
+		return "y"
+	}
+	return "n"
 }
