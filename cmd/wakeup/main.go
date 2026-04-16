@@ -695,21 +695,7 @@ func interactiveConfig() *config.Config {
 		cfg = existing
 	}
 
-	// Ask about remote config mode
-	useRemote := prompt(
-		"Use remote config? (only need worker_url, token, device_id)",
-		"n",
-		"other settings will be pulled from the Worker [y/n]",
-		func(s string) error {
-			s = strings.ToLower(s)
-			if s != "y" && s != "n" && s != "yes" && s != "no" {
-				return fmt.Errorf("enter y or n")
-			}
-			return nil
-		},
-	)
-	minimalMode := strings.HasPrefix(strings.ToLower(useRemote), "y")
-
+	// Step 1: Always ask for the three essential fields first
 	// Worker URL
 	cfg.WorkerURL = prompt(
 		"Cloudflare Worker URL",
@@ -753,16 +739,26 @@ func interactiveConfig() *config.Config {
 		},
 	)
 
-	// In minimal mode, skip the rest — daemon will pull config from Worker
-	if minimalMode {
+	// Step 2: Try fetching remote config from the Worker
+	fmt.Println()
+	fmt.Println("Checking for remote config...")
+	remoteApplied := tryApplyRemoteConfig(cfg)
+
+	if remoteApplied {
+		// Path A: remote config found and applied
 		fmt.Println()
-		fmt.Println("--- Configuration Summary (minimal mode) ---")
-		fmt.Printf("  Worker URL:  %s\n", cfg.WorkerURL)
-		fmt.Printf("  Token:       %s\n", cfg.Token)
-		fmt.Printf("  Device ID:   %s\n", cfg.DeviceID)
-		fmt.Println()
-		fmt.Println("  Other settings will be pulled from the Worker on first check.")
-		fmt.Println("  Use 'wakeup config push' to set remote config.")
+		fmt.Println("--- Configuration Summary (from remote) ---")
+		fmt.Printf("  Worker URL:        %s\n", cfg.WorkerURL)
+		fmt.Printf("  Token:             %s\n", cfg.Token)
+		fmt.Printf("  Device ID:         %s\n", cfg.DeviceID)
+		fmt.Printf("  Check interval:    %s\n", cfg.CheckInterval)
+		fmt.Printf("  AC interval:       %s\n", cfg.ACCheckInterval)
+		fmt.Printf("  Battery interval:  %s\n", cfg.BatteryCheckInterval)
+		fmt.Printf("  Darkwake detect:   %v\n", cfg.EnableDarkwakeDetection)
+		if cfg.EnableDarkwakeDetection {
+			fmt.Printf("  Wake detect int:   %s\n", cfg.WakeDetectInterval)
+		}
+		fmt.Printf("  Wake duration:     %s\n", cfg.DefaultDuration)
 		fmt.Println()
 
 		confirm := prompt("Proceed with installation?", "y", "[y/n]", nil)
@@ -772,6 +768,11 @@ func interactiveConfig() *config.Config {
 		}
 		return cfg
 	}
+
+	// Path B: no remote config — prompt each remaining field
+	fmt.Println("No remote config found. Please configure each setting.")
+	fmt.Println("(Press Enter to keep the current/default value)")
+	fmt.Println()
 
 	// Check interval
 	intervalStr := prompt(
@@ -902,6 +903,73 @@ func interactiveConfig() *config.Config {
 	}
 
 	return cfg
+}
+
+// tryApplyRemoteConfig attempts to fetch global and device-specific remote config
+// from the Worker and merge them into cfg. Returns true if any remote config was found.
+func tryApplyRemoteConfig(cfg *config.Config) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	client := cloud.NewClient(cfg.WorkerURL, cfg.Token)
+
+	var hasRemote bool
+
+	// Fetch global config
+	globalResp, err := client.GetGlobalConfig(ctx)
+	if err == nil && !isEmptyRemoteConfig(&globalResp.Config) {
+		fmt.Println("  Found global remote config.")
+		applyCloudRemoteConfig(cfg, &globalResp.Config)
+		hasRemote = true
+	}
+
+	// Fetch device-specific config (overrides global)
+	deviceResp, err := client.GetDeviceConfig(ctx, cfg.DeviceID)
+	if err == nil && !isEmptyRemoteConfig(&deviceResp.Config) {
+		fmt.Printf("  Found device config for %q.\n", cfg.DeviceID)
+		applyCloudRemoteConfig(cfg, &deviceResp.Config)
+		hasRemote = true
+	}
+
+	if !hasRemote {
+		if err != nil {
+			fmt.Printf("  Could not reach Worker: %v\n", err)
+		}
+	}
+
+	return hasRemote
+}
+
+// applyCloudRemoteConfig applies non-zero fields from a cloud.RemoteConfig onto cfg.
+func applyCloudRemoteConfig(cfg *config.Config, rc *cloud.RemoteConfig) {
+	if rc.CheckInterval > 0 {
+		cfg.CheckInterval = time.Duration(rc.CheckInterval) * time.Second
+	}
+	if rc.DefaultDuration > 0 {
+		cfg.DefaultDuration = time.Duration(rc.DefaultDuration) * time.Second
+	}
+	if rc.ACCheckInterval > 0 {
+		cfg.ACCheckInterval = time.Duration(rc.ACCheckInterval) * time.Second
+	}
+	if rc.BatteryCheckInterval > 0 {
+		cfg.BatteryCheckInterval = time.Duration(rc.BatteryCheckInterval) * time.Second
+	}
+	if rc.EnableDarkwakeDetection != nil {
+		cfg.EnableDarkwakeDetection = *rc.EnableDarkwakeDetection
+	}
+	if rc.WakeDetectInterval > 0 {
+		cfg.WakeDetectInterval = time.Duration(rc.WakeDetectInterval) * time.Second
+	}
+}
+
+// isEmptyRemoteConfig returns true if all fields in the remote config are zero/nil.
+func isEmptyRemoteConfig(rc *cloud.RemoteConfig) bool {
+	return rc.CheckInterval == 0 &&
+		rc.DefaultDuration == 0 &&
+		rc.ACCheckInterval == 0 &&
+		rc.BatteryCheckInterval == 0 &&
+		rc.EnableDarkwakeDetection == nil &&
+		rc.WakeDetectInterval == 0
 }
 
 func prompt(label, defaultVal, hint string, validate func(string) error) string {
