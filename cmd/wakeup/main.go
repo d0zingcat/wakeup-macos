@@ -17,6 +17,7 @@ import (
 	"github.com/d0zingcat/wakeup-macos/internal/config"
 	"github.com/d0zingcat/wakeup-macos/internal/daemon"
 	"github.com/d0zingcat/wakeup-macos/internal/power"
+	"github.com/d0zingcat/wakeup-macos/internal/updater"
 )
 
 var version = "dev"
@@ -44,6 +45,8 @@ func main() {
 		runInstall()
 	case "uninstall":
 		runUninstall()
+	case "update":
+		runUpdate()
 	case "version":
 		fmt.Println("wakeup", version)
 	case "help", "-h", "--help":
@@ -71,6 +74,8 @@ Usage:
   wakeup cancel                        Cancel all active caffeinate sessions
   wakeup install                      Install as launchd daemon (requires sudo)
   wakeup uninstall                    Uninstall launchd daemon (requires sudo)
+  wakeup update                       Check for and apply updates (requires sudo)
+  wakeup update --check               Check for updates without applying
   wakeup version                      Print version
 
 Duration examples: 30m, 1h, 2h30m`)
@@ -554,6 +559,58 @@ func printCloudRemoteConfig(r *cloud.RemoteConfig) {
 	if r.WakeDetectInterval > 0 {
 		fmt.Printf("  wake_detect_interval:      %s\n", (time.Duration(r.WakeDetectInterval) * time.Second).String())
 	}
+}
+
+func runUpdate() {
+	checkOnly := len(os.Args) > 2 && os.Args[2] == "--check"
+
+	u := updater.New(version, binPath)
+	ctx := context.Background()
+
+	fmt.Println("Checking for updates...")
+	current, latest, hasUpdate, err := u.Check(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "update check failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("  Current: %s\n", current)
+	fmt.Printf("  Latest:  %s\n", latest)
+
+	if !hasUpdate {
+		fmt.Println("Already up to date.")
+		return
+	}
+
+	fmt.Printf("  Update available: %s -> %s\n", current, latest)
+
+	if checkOnly {
+		return
+	}
+
+	if os.Geteuid() != 0 {
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Applying update requires sudo:")
+		fmt.Fprintln(os.Stderr, "  sudo wakeup update")
+		os.Exit(1)
+	}
+
+	// Fetch release again for asset URLs (Check only returned metadata).
+	rel, err := u.CheckLatest(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fetch release: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Downloading and verifying...")
+	if err := u.Apply(ctx, rel); err != nil {
+		fmt.Fprintf(os.Stderr, "update failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "The previous binary has been preserved.")
+		os.Exit(1)
+	}
+
+	fmt.Printf("Updated to %s successfully.\n", latest)
+	fmt.Println("Daemon has been restarted.")
 }
 
 const (
