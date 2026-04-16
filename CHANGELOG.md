@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-04-16
+
+### Changed
+
+- Installer now auto-detects remote config: asks `worker_url`, `token`, `device_id` first, then fetches global and device-specific config from the Worker automatically
+- If remote config exists, it is applied directly — no manual prompts for timing/behavior settings
+- If no remote config is found, falls through to interactive prompts with existing or default values
+- Removed the "Use remote config? [y/n]" question — the installer determines the right path automatically
+- Fixed config priority comment to match actual runtime behavior: `local file < environment variables < remote global < remote device`
+
 ## [0.3.0] - 2026-04-16
 
 ### Added
@@ -87,6 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Detailed Worker deployment guide
 - Example config files `config.example.toml` and `wrangler.toml.example`
 
+[0.3.1]: https://github.com/d0zingcat/wakeup-macos/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/d0zingcat/wakeup-macos/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/d0zingcat/wakeup-macos/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/d0zingcat/wakeup-macos/compare/v0.1.1...v0.2.0
