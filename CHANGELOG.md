@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-04-16
+
+### Added
+
+- Centralized config distribution via Cloudflare Worker — manage all device configs from one place
+- New Worker endpoints: `PUT/GET/DELETE /{token}/config[/{device_id}]` for global and device-level config
+- `/check` response piggybacks merged remote config using version hash for conditional delivery
+- Config merge with priority chain: local file < remote global < remote device < environment variables
+- Daemon hot-reload: applies remote config changes (intervals, darkwake toggle) without restart
+- New CLI commands: `wakeup config push`, `get`, `delete`, `show`
+- `wakeup config show` displays effective merged config with source annotations (local/remote-global/remote-device)
+- Minimal install mode: only `worker_url`, `token`, `device_id` required — other settings pulled from Worker
+
+### Changed
+
+- `Check()` client method now returns `*CheckResult` containing optional remote config alongside wake signal
+- Install wizard now offers "use remote config?" option (defaults to full interactive mode for backward compatibility)
+- `config.example.toml` updated with remote config documentation
+
 ## [0.2.1] - 2026-04-15
 
 ### Added
@@ -68,6 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Detailed Worker deployment guide
 - Example config files `config.example.toml` and `wrangler.toml.example`
 
+[0.3.0]: https://github.com/d0zingcat/wakeup-macos/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/d0zingcat/wakeup-macos/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/d0zingcat/wakeup-macos/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/d0zingcat/wakeup-macos/compare/v0.1.0...v0.1.1
