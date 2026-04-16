@@ -11,6 +11,20 @@ token = "CHANGE_ME_TO_A_RANDOM_TOKEN"
 # Examples: "office", "home-mini", "home-mbp"
 device_id = "my-mac"
 
+# --- Remote config (v0.3.0+) ---
+# The fields below can be managed remotely via the Worker.
+# If remote config is set, it overrides local values (except worker_url, token, device_id).
+# Priority: local file < remote global < remote device < environment variables
+#
+# Minimal config: only worker_url, token, and device_id are required.
+# Other settings will be pulled from the Worker on each check.
+#
+# Manage remote config with:
+#   wakeup config push              # push local config as global remote config
+#   wakeup config push --device X   # push as device-specific config
+#   wakeup config get               # view remote global config
+#   wakeup config show              # view effective merged config with sources
+
 # How often to check for wake signals (daemon only)
 # This is the fallback interval; see ac/battery intervals below
 check_interval = "15m"

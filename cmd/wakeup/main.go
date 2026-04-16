@@ -36,6 +36,8 @@ func main() {
 		runStatus()
 	case "devices":
 		runDevices()
+	case "config":
+		runConfig()
 	case "install":
 		runInstall()
 	case "uninstall":
@@ -60,6 +62,10 @@ Usage:
   wakeup send --all [duration]        Send wake signal to all devices
   wakeup status                       Show status of all devices
   wakeup devices                      List registered devices
+  wakeup config push [--device <id>]  Push local config to remote (global or device)
+  wakeup config get [--device <id>]   Get remote config (global or device)
+  wakeup config delete --device <id>  Delete device-specific remote config
+  wakeup config show                  Show effective merged config with sources
   wakeup install                      Install as launchd daemon (requires sudo)
   wakeup uninstall                    Uninstall launchd daemon (requires sudo)
   wakeup version                      Print version
@@ -243,6 +249,297 @@ func runDevices() {
 	}
 }
 
+func runConfig() {
+	args := os.Args[2:]
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: wakeup config <push|get|delete|show> [--device <id>]")
+		os.Exit(1)
+	}
+
+	action := args[0]
+	deviceID := parseDeviceFlag(args[1:])
+
+	switch action {
+	case "push":
+		runConfigPush(deviceID)
+	case "get":
+		runConfigGet(deviceID)
+	case "delete":
+		runConfigDelete(deviceID)
+	case "show":
+		runConfigShow()
+	default:
+		fmt.Fprintf(os.Stderr, "unknown config action: %s\n", action)
+		fmt.Fprintln(os.Stderr, "usage: wakeup config <push|get|delete|show> [--device <id>]")
+		os.Exit(1)
+	}
+}
+
+func parseDeviceFlag(args []string) string {
+	for i, arg := range args {
+		if arg == "--device" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+func runConfigPush(deviceID string) {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
+		os.Exit(1)
+	}
+
+	client := cloud.NewClient(cfg.WorkerURL, cfg.Token)
+	remote := config.ToRemoteConfig(cfg)
+
+	ctx := context.Background()
+	if deviceID != "" {
+		resp, err := client.PushDeviceConfig(ctx, deviceID, toCloudRemoteConfig(remote))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "push failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Device config pushed for %s (version: %s)\n", deviceID, resp.Version)
+	} else {
+		resp, err := client.PushGlobalConfig(ctx, toCloudRemoteConfig(remote))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "push failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Global config pushed (version: %s)\n", resp.Version)
+	}
+
+	printRemoteConfig(remote)
+}
+
+func runConfigGet(deviceID string) {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
+		os.Exit(1)
+	}
+
+	client := cloud.NewClient(cfg.WorkerURL, cfg.Token)
+	ctx := context.Background()
+
+	var resp *cloud.ConfigResponse
+	if deviceID != "" {
+		resp, err = client.GetDeviceConfig(ctx, deviceID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "get failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Device config for %s (version: %s):\n", deviceID, resp.Version)
+	} else {
+		resp, err = client.GetGlobalConfig(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "get failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Global config (version: %s):\n", resp.Version)
+	}
+
+	printCloudRemoteConfig(&resp.Config)
+}
+
+func runConfigDelete(deviceID string) {
+	if deviceID == "" {
+		fmt.Fprintln(os.Stderr, "usage: wakeup config delete --device <id>")
+		os.Exit(1)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
+		os.Exit(1)
+	}
+
+	client := cloud.NewClient(cfg.WorkerURL, cfg.Token)
+	if err := client.DeleteDeviceConfig(context.Background(), deviceID); err != nil {
+		fmt.Fprintf(os.Stderr, "delete failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Device config deleted for %s\n", deviceID)
+}
+
+func runConfigShow() {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
+		os.Exit(1)
+	}
+
+	client := cloud.NewClient(cfg.WorkerURL, cfg.Token)
+	ctx := context.Background()
+
+	// Try to fetch remote config
+	var globalCfg, deviceCfg *cloud.RemoteConfig
+	globalResp, err := client.GetGlobalConfig(ctx)
+	if err == nil {
+		globalCfg = &globalResp.Config
+	}
+	if cfg.DeviceID != "" {
+		deviceResp, err := client.GetDeviceConfig(ctx, cfg.DeviceID)
+		if err == nil {
+			deviceCfg = &deviceResp.Config
+		}
+	}
+
+	fmt.Println("Effective config (merged):")
+	fmt.Println()
+
+	// Apply merge chain: local -> global -> device
+	merged := cfg
+	if globalCfg != nil {
+		remoteCfg := cloudToConfigRemote(globalCfg)
+		merged, _ = config.MergeRemote(merged, remoteCfg)
+	}
+	if deviceCfg != nil {
+		remoteCfg := cloudToConfigRemote(deviceCfg)
+		merged, _ = config.MergeRemote(merged, remoteCfg)
+	}
+
+	// Print each field with source annotation
+	printFieldWithSource("worker_url", merged.WorkerURL, "local (always)")
+	printFieldWithSource("token", merged.Token, "local (always)")
+	printFieldWithSource("device_id", merged.DeviceID, "local (always)")
+	printFieldWithSource("check_interval", merged.CheckInterval.String(),
+		fieldSource(cfg.CheckInterval, merged.CheckInterval, globalCfg, deviceCfg, "check_interval"))
+	printFieldWithSource("default_duration", merged.DefaultDuration.String(),
+		fieldSource(cfg.DefaultDuration, merged.DefaultDuration, globalCfg, deviceCfg, "default_duration"))
+	printFieldWithSource("ac_check_interval", merged.ACCheckInterval.String(),
+		fieldSource(cfg.ACCheckInterval, merged.ACCheckInterval, globalCfg, deviceCfg, "ac_check_interval"))
+	printFieldWithSource("battery_check_interval", merged.BatteryCheckInterval.String(),
+		fieldSource(cfg.BatteryCheckInterval, merged.BatteryCheckInterval, globalCfg, deviceCfg, "battery_check_interval"))
+	printFieldWithSource("enable_darkwake_detection", fmt.Sprintf("%v", merged.EnableDarkwakeDetection),
+		darkwakeSource(cfg.EnableDarkwakeDetection, merged.EnableDarkwakeDetection, globalCfg, deviceCfg))
+	printFieldWithSource("wake_detect_interval", merged.WakeDetectInterval.String(),
+		fieldSource(cfg.WakeDetectInterval, merged.WakeDetectInterval, globalCfg, deviceCfg, "wake_detect_interval"))
+}
+
+func printFieldWithSource(name, value, source string) {
+	fmt.Printf("  %-28s  %-16s  (%s)\n", name, value, source)
+}
+
+func fieldSource(localVal, mergedVal time.Duration, global, device *cloud.RemoteConfig, field string) string {
+	if device != nil {
+		var dv int
+		switch field {
+		case "check_interval":
+			dv = device.CheckInterval
+		case "default_duration":
+			dv = device.DefaultDuration
+		case "ac_check_interval":
+			dv = device.ACCheckInterval
+		case "battery_check_interval":
+			dv = device.BatteryCheckInterval
+		case "wake_detect_interval":
+			dv = device.WakeDetectInterval
+		}
+		if dv > 0 && time.Duration(dv)*time.Second == mergedVal {
+			return "remote-device"
+		}
+	}
+	if global != nil {
+		var gv int
+		switch field {
+		case "check_interval":
+			gv = global.CheckInterval
+		case "default_duration":
+			gv = global.DefaultDuration
+		case "ac_check_interval":
+			gv = global.ACCheckInterval
+		case "battery_check_interval":
+			gv = global.BatteryCheckInterval
+		case "wake_detect_interval":
+			gv = global.WakeDetectInterval
+		}
+		if gv > 0 && time.Duration(gv)*time.Second == mergedVal {
+			return "remote-global"
+		}
+	}
+	return "local"
+}
+
+func darkwakeSource(localVal, mergedVal bool, global, device *cloud.RemoteConfig) string {
+	if device != nil && device.EnableDarkwakeDetection != nil && *device.EnableDarkwakeDetection == mergedVal {
+		return "remote-device"
+	}
+	if global != nil && global.EnableDarkwakeDetection != nil && *global.EnableDarkwakeDetection == mergedVal {
+		return "remote-global"
+	}
+	return "local"
+}
+
+// Conversion helpers between config.RemoteConfig and cloud.RemoteConfig
+func toCloudRemoteConfig(r *config.RemoteConfig) *cloud.RemoteConfig {
+	return &cloud.RemoteConfig{
+		CheckInterval:           r.CheckInterval,
+		DefaultDuration:         r.DefaultDuration,
+		ACCheckInterval:         r.ACCheckInterval,
+		BatteryCheckInterval:    r.BatteryCheckInterval,
+		EnableDarkwakeDetection: r.EnableDarkwakeDetection,
+		WakeDetectInterval:      r.WakeDetectInterval,
+	}
+}
+
+func cloudToConfigRemote(r *cloud.RemoteConfig) *config.RemoteConfig {
+	return &config.RemoteConfig{
+		CheckInterval:           r.CheckInterval,
+		DefaultDuration:         r.DefaultDuration,
+		ACCheckInterval:         r.ACCheckInterval,
+		BatteryCheckInterval:    r.BatteryCheckInterval,
+		EnableDarkwakeDetection: r.EnableDarkwakeDetection,
+		WakeDetectInterval:      r.WakeDetectInterval,
+	}
+}
+
+func printRemoteConfig(r *config.RemoteConfig) {
+	fmt.Println()
+	if r.CheckInterval > 0 {
+		fmt.Printf("  check_interval:            %s\n", (time.Duration(r.CheckInterval) * time.Second).String())
+	}
+	if r.DefaultDuration > 0 {
+		fmt.Printf("  default_duration:          %s\n", (time.Duration(r.DefaultDuration) * time.Second).String())
+	}
+	if r.ACCheckInterval > 0 {
+		fmt.Printf("  ac_check_interval:         %s\n", (time.Duration(r.ACCheckInterval) * time.Second).String())
+	}
+	if r.BatteryCheckInterval > 0 {
+		fmt.Printf("  battery_check_interval:    %s\n", (time.Duration(r.BatteryCheckInterval) * time.Second).String())
+	}
+	if r.EnableDarkwakeDetection != nil {
+		fmt.Printf("  enable_darkwake_detection: %v\n", *r.EnableDarkwakeDetection)
+	}
+	if r.WakeDetectInterval > 0 {
+		fmt.Printf("  wake_detect_interval:      %s\n", (time.Duration(r.WakeDetectInterval) * time.Second).String())
+	}
+}
+
+func printCloudRemoteConfig(r *cloud.RemoteConfig) {
+	fmt.Println()
+	if r.CheckInterval > 0 {
+		fmt.Printf("  check_interval:            %s\n", (time.Duration(r.CheckInterval) * time.Second).String())
+	}
+	if r.DefaultDuration > 0 {
+		fmt.Printf("  default_duration:          %s\n", (time.Duration(r.DefaultDuration) * time.Second).String())
+	}
+	if r.ACCheckInterval > 0 {
+		fmt.Printf("  ac_check_interval:         %s\n", (time.Duration(r.ACCheckInterval) * time.Second).String())
+	}
+	if r.BatteryCheckInterval > 0 {
+		fmt.Printf("  battery_check_interval:    %s\n", (time.Duration(r.BatteryCheckInterval) * time.Second).String())
+	}
+	if r.EnableDarkwakeDetection != nil {
+		fmt.Printf("  enable_darkwake_detection: %v\n", *r.EnableDarkwakeDetection)
+	}
+	if r.WakeDetectInterval > 0 {
+		fmt.Printf("  wake_detect_interval:      %s\n", (time.Duration(r.WakeDetectInterval) * time.Second).String())
+	}
+}
+
 const (
 	binPath    = "/usr/local/bin/wakeup"
 	plistName  = "com.wakeup.daemon"
@@ -398,6 +695,21 @@ func interactiveConfig() *config.Config {
 		cfg = existing
 	}
 
+	// Ask about remote config mode
+	useRemote := prompt(
+		"Use remote config? (only need worker_url, token, device_id)",
+		"n",
+		"other settings will be pulled from the Worker [y/n]",
+		func(s string) error {
+			s = strings.ToLower(s)
+			if s != "y" && s != "n" && s != "yes" && s != "no" {
+				return fmt.Errorf("enter y or n")
+			}
+			return nil
+		},
+	)
+	minimalMode := strings.HasPrefix(strings.ToLower(useRemote), "y")
+
 	// Worker URL
 	cfg.WorkerURL = prompt(
 		"Cloudflare Worker URL",
@@ -440,6 +752,26 @@ func interactiveConfig() *config.Config {
 			return nil
 		},
 	)
+
+	// In minimal mode, skip the rest — daemon will pull config from Worker
+	if minimalMode {
+		fmt.Println()
+		fmt.Println("--- Configuration Summary (minimal mode) ---")
+		fmt.Printf("  Worker URL:  %s\n", cfg.WorkerURL)
+		fmt.Printf("  Token:       %s\n", cfg.Token)
+		fmt.Printf("  Device ID:   %s\n", cfg.DeviceID)
+		fmt.Println()
+		fmt.Println("  Other settings will be pulled from the Worker on first check.")
+		fmt.Println("  Use 'wakeup config push' to set remote config.")
+		fmt.Println()
+
+		confirm := prompt("Proceed with installation?", "y", "[y/n]", nil)
+		if !strings.HasPrefix(strings.ToLower(confirm), "y") {
+			fmt.Println("Installation cancelled.")
+			os.Exit(0)
+		}
+		return cfg
+	}
 
 	// Check interval
 	intervalStr := prompt(

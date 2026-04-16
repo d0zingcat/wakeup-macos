@@ -14,12 +14,13 @@ import (
 )
 
 type Daemon struct {
-	cfg         *config.Config
-	client      *cloud.Client
-	session     *power.Session
-	sessionDone chan *power.Session
-	lastCheck   time.Time
-	onACPower   bool
+	cfg           *config.Config
+	client        *cloud.Client
+	session       *power.Session
+	sessionDone   chan *power.Session
+	lastCheck     time.Time
+	onACPower     bool
+	configVersion string // remote config version hash
 	// darkwake detection (Phase 2) — wall clock only, no monotonic
 	lastWallTime time.Time
 }
@@ -56,6 +57,11 @@ func (d *Daemon) Run() error {
 	ticker := time.NewTicker(d.cfg.ACCheckInterval)
 	defer ticker.Stop()
 
+	// Track current intervals for change detection
+	currentACInterval := d.cfg.ACCheckInterval
+	currentDarkwake := d.cfg.EnableDarkwakeDetection
+	currentWakeDetect := d.cfg.WakeDetectInterval
+
 	// Darkwake detection: fast ticker using wall clock jump detection
 	var wakeTicker *time.Ticker
 	var wakeTickerC <-chan time.Time
@@ -64,13 +70,44 @@ func (d *Daemon) Run() error {
 		wakeTicker = time.NewTicker(d.cfg.WakeDetectInterval)
 		wakeTickerC = wakeTicker.C
 		d.lastWallTime = wallNow()
-		defer wakeTicker.Stop()
+		defer func() {
+			if wakeTicker != nil {
+				wakeTicker.Stop()
+			}
+		}()
 	}
 
 	// Run first check immediately
 	d.check(ctx)
 
 	for {
+		// Hot-reload: rebuild tickers if config changed
+		if d.cfg.ACCheckInterval != currentACInterval {
+			log.Printf("hot-reload: ac_check_interval changed %s -> %s", currentACInterval, d.cfg.ACCheckInterval)
+			ticker.Reset(d.cfg.ACCheckInterval)
+			currentACInterval = d.cfg.ACCheckInterval
+		}
+		if d.cfg.EnableDarkwakeDetection != currentDarkwake || d.cfg.WakeDetectInterval != currentWakeDetect {
+			if d.cfg.EnableDarkwakeDetection {
+				if wakeTicker == nil {
+					log.Printf("hot-reload: darkwake detection enabled (interval=%s)", d.cfg.WakeDetectInterval)
+					wakeTicker = time.NewTicker(d.cfg.WakeDetectInterval)
+					d.lastWallTime = wallNow()
+				} else if d.cfg.WakeDetectInterval != currentWakeDetect {
+					log.Printf("hot-reload: wake_detect_interval changed %s -> %s", currentWakeDetect, d.cfg.WakeDetectInterval)
+					wakeTicker.Reset(d.cfg.WakeDetectInterval)
+				}
+				wakeTickerC = wakeTicker.C
+			} else if wakeTicker != nil {
+				log.Printf("hot-reload: darkwake detection disabled")
+				wakeTicker.Stop()
+				wakeTicker = nil
+				wakeTickerC = nil
+			}
+			currentDarkwake = d.cfg.EnableDarkwakeDetection
+			currentWakeDetect = d.cfg.WakeDetectInterval
+		}
+
 		select {
 		case <-ticker.C:
 			d.onACPower = power.IsOnACPower()
@@ -118,7 +155,7 @@ func (d *Daemon) check(ctx context.Context) {
 	log.Printf("checking for wake signal (device=%s, power=%s)",
 		d.cfg.DeviceID, d.powerStateStr())
 
-	sig, err := d.client.Check(ctx, d.cfg.DeviceID)
+	result, err := d.client.Check(ctx, d.cfg.DeviceID, d.configVersion)
 	if err != nil {
 		if ctx.Err() != nil {
 			return // shutting down, don't log
@@ -130,13 +167,18 @@ func (d *Daemon) check(ctx context.Context) {
 
 	d.lastCheck = time.Now()
 
-	if sig == nil {
+	// Apply remote config if changed
+	if result.Config != nil && result.ConfigVersion != d.configVersion {
+		d.applyRemoteConfig(result)
+	}
+
+	if result.Signal == nil {
 		log.Printf("no wake signal, scheduling next wake")
 		d.scheduleNextWake()
 		return
 	}
 
-	duration := time.Duration(sig.Duration) * time.Second
+	duration := time.Duration(result.Signal.Duration) * time.Second
 	if duration < 1*time.Minute {
 		duration = d.cfg.DefaultDuration
 	}
@@ -163,6 +205,30 @@ func (d *Daemon) check(ctx context.Context) {
 		<-session.Done()
 		d.sessionDone <- session
 	}()
+}
+
+// applyRemoteConfig merges remote config into the running config and
+// returns whether the config actually changed (requiring ticker rebuild).
+func (d *Daemon) applyRemoteConfig(result *cloud.CheckResult) {
+	// Convert cloud.RemoteConfig to config.RemoteConfig
+	remoteCfg := &config.RemoteConfig{
+		CheckInterval:           result.Config.CheckInterval,
+		DefaultDuration:         result.Config.DefaultDuration,
+		ACCheckInterval:         result.Config.ACCheckInterval,
+		BatteryCheckInterval:    result.Config.BatteryCheckInterval,
+		EnableDarkwakeDetection: result.Config.EnableDarkwakeDetection,
+		WakeDetectInterval:      result.Config.WakeDetectInterval,
+	}
+
+	merged, err := config.MergeRemote(d.cfg, remoteCfg)
+	if err != nil {
+		log.Printf("remote config validation failed, keeping current config: %v", err)
+		return
+	}
+
+	d.cfg = merged
+	d.configVersion = result.ConfigVersion
+	log.Printf("config updated from remote (version: %s)", result.ConfigVersion)
 }
 
 func (d *Daemon) currentInterval() time.Duration {
