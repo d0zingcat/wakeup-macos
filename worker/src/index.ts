@@ -173,7 +173,7 @@ export default {
             `wake-signal:${id}`,
             JSON.stringify(signal),
             {
-              expirationTtl: 900, // 15 minutes
+              expirationTtl: 86400, // 1 day
             },
           );
         }
@@ -184,6 +184,11 @@ export default {
         return errorResponse("device_id required", 400);
       }
 
+      const device = await env.WAKEUP_KV.get(`device:${deviceId}`);
+      if (!device) {
+        return errorResponse("device not found", 404);
+      }
+
       const signal: WakeSignal = {
         wake: true,
         duration,
@@ -192,7 +197,7 @@ export default {
       await env.WAKEUP_KV.put(
         `wake-signal:${deviceId}`,
         JSON.stringify(signal),
-        { expirationTtl: 900 },
+        { expirationTtl: 86400 },
       );
       return jsonResponse({ ok: true, device: deviceId, duration });
     }

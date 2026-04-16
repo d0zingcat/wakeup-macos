@@ -38,6 +38,8 @@ func main() {
 		runDevices()
 	case "config":
 		runConfig()
+	case "cancel":
+		runCancel()
 	case "install":
 		runInstall()
 	case "uninstall":
@@ -66,6 +68,7 @@ Usage:
   wakeup config get [--device <id>]   Get remote config (global or device)
   wakeup config delete --device <id>  Delete device-specific remote config
   wakeup config show                  Show effective merged config with sources
+  wakeup cancel                        Cancel all active caffeinate sessions
   wakeup install                      Install as launchd daemon (requires sudo)
   wakeup uninstall                    Uninstall launchd daemon (requires sudo)
   wakeup version                      Print version
@@ -89,6 +92,19 @@ func runDaemon() {
 		fmt.Fprintf(os.Stderr, "daemon error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func runCancel() {
+	killed, err := power.KillAllCaffeinate()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cancel error: %v\n", err)
+		os.Exit(1)
+	}
+	if killed == 0 {
+		fmt.Println("no active caffeinate sessions found")
+		return
+	}
+	fmt.Printf("cancelled %d caffeinate session(s)\n", killed)
 }
 
 func runSend() {
