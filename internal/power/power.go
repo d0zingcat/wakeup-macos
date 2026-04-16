@@ -138,6 +138,37 @@ func parseACPower(output string) bool {
 	return true
 }
 
+// KillAllCaffeinate kills all caffeinate processes started by wakeup (matching "caffeinate -s -t").
+// Returns the number of processes killed. Suitable for user-facing commands.
+func KillAllCaffeinate() (int, error) {
+	out, err := exec.Command("pgrep", "-f", "caffeinate -s -t").Output()
+	if err != nil {
+		return 0, nil // no matching processes
+	}
+	killed := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		pid, err := strconv.Atoi(line)
+		if err != nil {
+			continue
+		}
+		if pid == os.Getpid() {
+			continue
+		}
+		proc, err := os.FindProcess(pid)
+		if err != nil {
+			continue
+		}
+		if err := proc.Kill(); err != nil {
+			continue
+		}
+		killed++
+	}
+	return killed, nil
+}
+
 // CleanOrphanCaffeinate kills any orphaned caffeinate processes from previous runs.
 func CleanOrphanCaffeinate() {
 	out, err := exec.Command("pgrep", "-f", "caffeinate -s -t").Output()
