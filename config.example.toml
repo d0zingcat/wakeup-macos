@@ -14,7 +14,11 @@ device_id = "my-mac"
 # --- Remote config (v0.3.0+) ---
 # The fields below can be managed remotely via the Worker.
 # If remote config is set, it overrides local values (except worker_url, token, device_id).
-# Priority: local file < remote global < remote device < environment variables
+# Priority: local file < environment variables < remote global < remote device
+#
+# During installation, the installer automatically checks the Worker for remote config.
+# If found, remote values are applied and written to local config files.
+# If not found, the installer prompts for each setting interactively.
 #
 # Minimal config: only worker_url, token, and device_id are required.
 # Other settings will be pulled from the Worker on each check.

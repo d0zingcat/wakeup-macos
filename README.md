@@ -128,7 +128,7 @@ make build
 sudo ./wakeup install
 ```
 
-The interactive installer will guide you through:
+The interactive installer will guide you through. It first asks for the three essential fields, then automatically checks the Worker for remote config:
 
 ```
 === wakeup-macos installer ===
@@ -136,17 +136,34 @@ The interactive installer will guide you through:
   Cloudflare Worker URL []: https://wakeup-worker.your-subdomain.workers.dev
   Auth token [a1b2c3d4e5f6...]: (press Enter to use generated token)
   Device ID for this Mac [your-hostname]: office
-  Check interval [15m]:
-  Default wake duration [30m]:
 
---- Configuration Summary ---
-  Worker URL:     https://wakeup-worker.your-subdomain.workers.dev
-  Token:          a1b2c3d4e5f6...
-  Device ID:      office
-  Check interval: 15m
-  Wake duration:  30m
+Checking for remote config...
+  Found global remote config.
+  Found device config for "office".
+
+--- Configuration Summary (from remote) ---
+  Worker URL:        https://wakeup-worker.your-subdomain.workers.dev
+  Token:             a1b2c3d4e5f6...
+  Device ID:         office
+  Check interval:    2m0s
+  AC interval:       2m0s
+  Battery interval:  15m0s
+  Wake duration:     30m0s
 
   Proceed with installation? [y]:
+```
+
+If no remote config is found, the installer prompts for each setting individually, showing existing or default values:
+
+```
+No remote config found. Please configure each setting.
+(Press Enter to keep the current/default value)
+
+  Check interval [15m]:
+  Default wake duration [30m]:
+  AC power check interval [2m]:
+  Battery check interval [15m]:
+  ...
 ```
 
 > **Important:** Use the same `AUTH_TOKEN` value in both `wrangler.toml` and the installer prompt.
