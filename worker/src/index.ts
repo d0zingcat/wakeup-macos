@@ -11,6 +11,7 @@ interface WakeSignal {
 
 interface DeviceInfo {
   last_seen: number;
+  tailscale_ip?: string;
 }
 
 // ConfigData contains remotely manageable fields (excludes worker_url, token, device_id).
@@ -208,8 +209,22 @@ export default {
         return errorResponse("device_id required", 400);
       }
 
-      // Update device last_seen
+      // Read ip query param for Tailscale IP reporting
+      const tailscaleIP = url.searchParams.get("ip");
+
+      // Read existing device info to preserve tailscale_ip if not reported this cycle
+      const existingRaw = await env.WAKEUP_KV.get(`device:${deviceId}`);
+      const existing: DeviceInfo | null = existingRaw
+        ? JSON.parse(existingRaw)
+        : null;
+
+      // Update device last_seen, preserve or update tailscale_ip
       const deviceInfo: DeviceInfo = { last_seen: Date.now() };
+      if (tailscaleIP) {
+        deviceInfo.tailscale_ip = tailscaleIP;
+      } else if (existing?.tailscale_ip) {
+        deviceInfo.tailscale_ip = existing.tailscale_ip;
+      }
       await env.WAKEUP_KV.put(
         `device:${deviceId}`,
         JSON.stringify(deviceInfo),
@@ -307,7 +322,7 @@ export default {
       const deviceKeys = await env.WAKEUP_KV.list({ prefix: "device:" });
       const statuses: Record<
         string,
-        { last_seen: number; pending_wake: boolean }
+        { last_seen: number; pending_wake: boolean; tailscale_ip?: string }
       > = {};
 
       for (const k of deviceKeys.keys) {
@@ -320,6 +335,7 @@ export default {
         statuses[id] = {
           last_seen: device.last_seen,
           pending_wake: !!signalRaw,
+          tailscale_ip: device.tailscale_ip,
         };
       }
 
