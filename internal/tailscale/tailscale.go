@@ -2,6 +2,7 @@ package tailscale
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -46,11 +47,16 @@ func IPv4() (string, error) {
 	return parseIPv4Output(string(out))
 }
 
-// parseIPv4Output extracts the IP from command output.
+// parseIPv4Output extracts and validates the IPv4 address from command output.
 func parseIPv4Output(output string) (string, error) {
-	ip := strings.TrimSpace(output)
+	// Take first line only — error messages may follow on subsequent lines
+	ip := strings.TrimSpace(strings.SplitN(output, "\n", 2)[0])
 	if ip == "" {
 		return "", fmt.Errorf("empty output from tailscale ip -4")
+	}
+	// Validate it is actually an IP — reject error messages from the CLI
+	if net.ParseIP(ip) == nil {
+		return "", fmt.Errorf("tailscale ip -4 returned non-IP output: %q", ip)
 	}
 	return ip, nil
 }
