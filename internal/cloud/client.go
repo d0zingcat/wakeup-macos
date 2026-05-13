@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
+	neturl "net/url"
 	"time"
 )
 
@@ -71,22 +71,22 @@ func NewClient(baseURL, token string) *Client {
 // If configVersion is non-empty, it is sent as the cv query parameter.
 // If tailscaleIP is non-empty, it is sent as the ip query parameter.
 func (c *Client) Check(ctx context.Context, deviceID string, configVersion string, tailscaleIP string) (*CheckResult, error) {
-	url := fmt.Sprintf("%s/%s/check/%s", c.baseURL, c.token, deviceID)
+	endpoint := fmt.Sprintf("%s/%s/check/%s", c.baseURL, c.token, deviceID)
 
-	// Build query params
-	params := []string{}
+	// Build query params with proper encoding
+	q := neturl.Values{}
 	if configVersion != "" {
-		params = append(params, "cv="+configVersion)
+		q.Set("cv", configVersion)
 	}
 	if tailscaleIP != "" {
-		params = append(params, "ip="+tailscaleIP)
+		q.Set("ip", tailscaleIP)
 	}
-	if len(params) > 0 {
-		url += "?" + strings.Join(params, "&")
+	if len(q) > 0 {
+		endpoint += "?" + q.Encode()
 	}
 
 	var raw json.RawMessage
-	err := c.doWithRetry(ctx, "GET", url, nil, &raw)
+	err := c.doWithRetry(ctx, "GET", endpoint, nil, &raw)
 	if err != nil {
 		return nil, err
 	}
