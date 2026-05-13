@@ -16,8 +16,10 @@ import (
 	"github.com/d0zingcat/wakeup-macos/internal/cloud"
 	"github.com/d0zingcat/wakeup-macos/internal/config"
 	"github.com/d0zingcat/wakeup-macos/internal/daemon"
+	"github.com/d0zingcat/wakeup-macos/internal/notify"
 	"github.com/d0zingcat/wakeup-macos/internal/power"
 	"github.com/d0zingcat/wakeup-macos/internal/updater"
+	"github.com/d0zingcat/wakeup-macos/internal/watch"
 )
 
 var version = "dev"
@@ -63,7 +65,8 @@ func printUsage() {
 
 Usage:
   wakeup daemon                       Run the wake-check daemon (foreground)
-  wakeup send <device_id> [duration]  Send wake signal to a device (default: 30m)
+  wakeup send <device_id> [duration] [--watch] [--ip <addr>]
+                                      Send wake signal to a device (default: 30m)
   wakeup send --all [duration]        Send wake signal to all devices
   wakeup status                       Show status of all devices
   wakeup devices                      List registered devices
@@ -123,24 +126,50 @@ func runSend() {
 	args := os.Args[2:]
 
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: wakeup send <device_id> [duration]")
+		fmt.Fprintln(os.Stderr, "usage: wakeup send <device_id> [duration] [--watch] [--ip <addr>]")
 		fmt.Fprintln(os.Stderr, "       wakeup send --all [duration]")
 		os.Exit(1)
 	}
 
+	// Parse flags from args
 	var all bool
 	var deviceID string
 	var durationStr string
+	var watchFlag bool
+	var ipFlag string
 
-	if args[0] == "--all" {
-		all = true
-		if len(args) > 1 {
-			durationStr = args[1]
+	positional := []string{}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--all":
+			all = true
+		case "--watch":
+			watchFlag = true
+		case "--ip":
+			if i+1 < len(args) {
+				i++
+				ipFlag = args[i]
+			} else {
+				fmt.Fprintln(os.Stderr, "--ip requires an argument")
+				os.Exit(1)
+			}
+		default:
+			positional = append(positional, args[i])
+		}
+	}
+
+	if !all {
+		if len(positional) == 0 {
+			fmt.Fprintln(os.Stderr, "usage: wakeup send <device_id> [duration] [--watch] [--ip <addr>]")
+			os.Exit(1)
+		}
+		deviceID = positional[0]
+		if len(positional) > 1 {
+			durationStr = positional[1]
 		}
 	} else {
-		deviceID = args[0]
-		if len(args) > 1 {
-			durationStr = args[1]
+		if len(positional) > 0 {
+			durationStr = positional[0]
 		}
 	}
 
@@ -162,14 +191,57 @@ func runSend() {
 			os.Exit(1)
 		}
 		fmt.Printf("Wake signal sent to all devices (duration: %s)\n", duration)
-	} else {
-		err = client.Send(ctx, deviceID, duration)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "send failed: %v\n", err)
+		if watchFlag {
+			fmt.Fprintln(os.Stderr, "--watch is not supported with --all")
 			os.Exit(1)
 		}
-		fmt.Printf("Wake signal sent to %s (duration: %s)\n", deviceID, duration)
+		return
 	}
+
+	err = client.Send(ctx, deviceID, duration)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "send failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Wake signal sent to %s (duration: %s)\n", deviceID, duration)
+
+	if !watchFlag {
+		return
+	}
+
+	// Resolve target IP
+	targetIP := ipFlag
+	if targetIP == "" {
+		ip, err := client.GetDeviceIP(ctx, deviceID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to fetch device IP: %v\n", err)
+			os.Exit(1)
+		}
+		if ip == "" {
+			fmt.Fprintf(os.Stderr, "no Tailscale IP known for device %q, use --ip to specify\n", deviceID)
+			os.Exit(1)
+		}
+		targetIP = ip
+	}
+
+	// Watch loop
+	fmt.Printf("Watching %s (%s)...\n", deviceID, targetIP)
+
+	start := time.Now()
+	err = watch.Watch(ctx, targetIP, 5*time.Second, 10*time.Minute, func(elapsed time.Duration) {
+		fmt.Printf("\rWatching %s (%s)... %s", deviceID, targetIP, elapsed.Truncate(time.Second))
+	})
+
+	fmt.Println() // newline after progress
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "✗ Device %s did not come online within 10m0s\n", deviceID)
+		os.Exit(1)
+	}
+
+	elapsed := time.Since(start).Truncate(time.Second)
+	msg := fmt.Sprintf("✓ Device %s is online (took %s)", deviceID, elapsed)
+	notify.Send(msg)
 }
 
 func runStatus() {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -47,8 +48,9 @@ type ConfigResponse struct {
 }
 
 type DeviceStatus struct {
-	LastSeen    int64 `json:"last_seen"`
-	PendingWake bool  `json:"pending_wake"`
+	LastSeen    int64  `json:"last_seen"`
+	PendingWake bool   `json:"pending_wake"`
+	TailscaleIP string `json:"tailscale_ip,omitempty"`
 }
 
 type DeviceInfo struct {
@@ -66,12 +68,21 @@ func NewClient(baseURL, token string) *Client {
 }
 
 // Check reads and clears the wake signal for a device.
-// If configVersion is non-empty, it is sent as the cv query parameter
-// for conditional config delivery.
-func (c *Client) Check(ctx context.Context, deviceID string, configVersion string) (*CheckResult, error) {
+// If configVersion is non-empty, it is sent as the cv query parameter.
+// If tailscaleIP is non-empty, it is sent as the ip query parameter.
+func (c *Client) Check(ctx context.Context, deviceID string, configVersion string, tailscaleIP string) (*CheckResult, error) {
 	url := fmt.Sprintf("%s/%s/check/%s", c.baseURL, c.token, deviceID)
+
+	// Build query params
+	params := []string{}
 	if configVersion != "" {
-		url += "?cv=" + configVersion
+		params = append(params, "cv="+configVersion)
+	}
+	if tailscaleIP != "" {
+		params = append(params, "ip="+tailscaleIP)
+	}
+	if len(params) > 0 {
+		url += "?" + strings.Join(params, "&")
 	}
 
 	var raw json.RawMessage
@@ -132,6 +143,20 @@ func (c *Client) Status(ctx context.Context) (map[string]DeviceStatus, error) {
 		return nil, err
 	}
 	return resp.Devices, nil
+}
+
+// GetDeviceIP fetches the Tailscale IP for a specific device from the Worker.
+// Returns empty string if the device has no reported IP.
+func (c *Client) GetDeviceIP(ctx context.Context, deviceID string) (string, error) {
+	statuses, err := c.Status(ctx)
+	if err != nil {
+		return "", err
+	}
+	device, ok := statuses[deviceID]
+	if !ok {
+		return "", fmt.Errorf("device %q not found", deviceID)
+	}
+	return device.TailscaleIP, nil
 }
 
 // Devices returns all registered devices.
