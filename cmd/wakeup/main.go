@@ -302,7 +302,12 @@ func runStatus() {
 			t := time.UnixMilli(s.LastSeen)
 			lastSeen = time.Since(t).Truncate(time.Second).String() + " ago"
 		}
-		fmt.Printf("  %-20s  %-25s  (last seen: %s)\n", id, state, lastSeen)
+
+		ipStr := ""
+		if s.TailscaleIP != "" {
+			ipStr = s.TailscaleIP
+		}
+		fmt.Printf("  %-20s  %-25s  %-16s  (last seen: %s)\n", id, state, ipStr, lastSeen)
 	}
 
 	fmt.Println()
