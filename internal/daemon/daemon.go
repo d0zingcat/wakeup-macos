@@ -11,6 +11,7 @@ import (
 	"github.com/d0zingcat/wakeup-macos/internal/cloud"
 	"github.com/d0zingcat/wakeup-macos/internal/config"
 	"github.com/d0zingcat/wakeup-macos/internal/power"
+	"github.com/d0zingcat/wakeup-macos/internal/tailscale"
 )
 
 type Daemon struct {
@@ -155,7 +156,18 @@ func (d *Daemon) check(ctx context.Context) {
 	log.Printf("checking for wake signal (device=%s, power=%s)",
 		d.cfg.DeviceID, d.powerStateStr())
 
-	result, err := d.client.Check(ctx, d.cfg.DeviceID, d.configVersion)
+	// Discover Tailscale IP if available (non-fatal if not)
+	var tsIP string
+	if tailscale.Available() {
+		ip, err := tailscale.IPv4()
+		if err != nil {
+			log.Printf("tailscale ip discovery failed (non-fatal): %v", err)
+		} else {
+			tsIP = ip
+		}
+	}
+
+	result, err := d.client.Check(ctx, d.cfg.DeviceID, d.configVersion, tsIP)
 	if err != nil {
 		if ctx.Err() != nil {
 			return // shutting down, don't log

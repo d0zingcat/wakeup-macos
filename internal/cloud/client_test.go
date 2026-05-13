@@ -22,7 +22,7 @@ func TestCheck_WithSignal(t *testing.T) {
 
 	ctx := context.Background()
 	c := NewClient(srv.URL, "testtoken")
-	result, err := c.Check(ctx, "office", "")
+	result, err := c.Check(ctx, "office", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestCheck_NoSignal(t *testing.T) {
 
 	ctx := context.Background()
 	c := NewClient(srv.URL, "testtoken")
-	result, err := c.Check(ctx, "office", "")
+	result, err := c.Check(ctx, "office", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestCheck_404(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "badtoken")
-	_, err := c.Check(context.Background(), "office", "")
+	_, err := c.Check(context.Background(), "office", "", "")
 	if err == nil {
 		t.Fatal("expected error for 404")
 	}
@@ -141,7 +141,7 @@ func TestCheck_Retry(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "tok")
-	result, err := c.Check(context.Background(), "office", "")
+	result, err := c.Check(context.Background(), "office", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestCheck_ContextCancelled(t *testing.T) {
 
 	c := NewClient(srv.URL, "tok")
 	start := time.Now()
-	_, err := c.Check(ctx, "office", "")
+	_, err := c.Check(ctx, "office", "", "")
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -192,7 +192,7 @@ func TestCheck_WithConfigPiggyback(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "tok")
-	result, err := c.Check(context.Background(), "office", "abc123")
+	result, err := c.Check(context.Background(), "office", "abc123", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestCheck_NoConfig(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "tok")
-	result, err := c.Check(context.Background(), "office", "")
+	result, err := c.Check(context.Background(), "office", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
