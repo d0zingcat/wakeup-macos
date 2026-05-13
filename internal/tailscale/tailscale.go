@@ -8,53 +8,117 @@ import (
 	"strings"
 )
 
-// Known paths where the Tailscale CLI may be installed on macOS.
-var knownPaths = []string{
-	"/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-	"/usr/local/bin/tailscale",
-	"/opt/homebrew/bin/tailscale",
+// tailscaleCGNAT is the Tailscale CGNAT range 100.64.0.0/10.
+var tailscaleCGNAT = &net.IPNet{
+	IP:   net.IP{100, 64, 0, 0},
+	Mask: net.CIDRMask(10, 32),
 }
 
-// findBinary returns the path to the tailscale CLI binary.
-// Checks PATH first, then known macOS installation paths.
-func findBinary() string {
+// Ordered so that standalone/homebrew binaries (which talk to tailscaled)
+// come before the App bundle CLI (which requires the GUI to be reachable).
+var knownPaths = []string{
+	"/opt/homebrew/bin/tailscale",
+	"/usr/local/bin/tailscale",
+	"/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+}
+
+func candidates() []string {
+	var paths []string
+	seen := map[string]bool{}
+
 	if p, err := exec.LookPath("tailscale"); err == nil {
-		return p
+		paths = append(paths, p)
+		seen[p] = true
 	}
 	for _, p := range knownPaths {
+		if seen[p] {
+			continue
+		}
 		if _, err := os.Stat(p); err == nil {
-			return p
+			paths = append(paths, p)
+			seen[p] = true
 		}
 	}
-	return ""
+	return paths
 }
 
-// Available returns true if the tailscale CLI can be found.
+// Available returns true if Tailscale is available (interface up or CLI found).
 func Available() bool {
-	return findBinary() != ""
+	if _, err := ipFromInterface(); err == nil {
+		return true
+	}
+	return len(candidates()) > 0
 }
 
-// IPv4 runs `tailscale ip -4` and returns the first IPv4 address.
+// IPv4 returns the Tailscale IPv4 address. It first checks network interfaces
+// for an IP in the CGNAT range (works as root without CLI), then falls back to
+// running the tailscale CLI.
 func IPv4() (string, error) {
-	bin := findBinary()
-	if bin == "" {
-		return "", fmt.Errorf("tailscale CLI not found")
+	if ip, err := ipFromInterface(); err == nil {
+		return ip, nil
 	}
-	out, err := exec.Command(bin, "ip", "-4").Output()
+
+	bins := candidates()
+	if len(bins) == 0 {
+		return "", fmt.Errorf("tailscale IP not found on interfaces and no CLI available")
+	}
+
+	var lastErr error
+	for _, bin := range bins {
+		out, err := exec.Command(bin, "ip", "-4").Output()
+		if err != nil {
+			lastErr = fmt.Errorf("%s: %w", bin, err)
+			continue
+		}
+		ip, err := parseIPv4Output(string(out))
+		if err != nil {
+			lastErr = fmt.Errorf("%s: %w", bin, err)
+			continue
+		}
+		return ip, nil
+	}
+	return "", fmt.Errorf("all tailscale binaries failed: %w", lastErr)
+}
+
+// ipFromInterface scans network interfaces for an IPv4 in the Tailscale CGNAT range.
+func ipFromInterface() (string, error) {
+	ifaces, err := net.Interfaces()
 	if err != nil {
-		return "", fmt.Errorf("tailscale ip -4: %w", err)
+		return "", err
 	}
-	return parseIPv4Output(string(out))
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil || ip.To4() == nil {
+				continue
+			}
+			if tailscaleCGNAT.Contains(ip) {
+				return ip.String(), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no interface with Tailscale CGNAT IP found")
 }
 
 // parseIPv4Output extracts and validates the IPv4 address from command output.
 func parseIPv4Output(output string) (string, error) {
-	// Take first line only — error messages may follow on subsequent lines
 	ip := strings.TrimSpace(strings.SplitN(output, "\n", 2)[0])
 	if ip == "" {
 		return "", fmt.Errorf("empty output from tailscale ip -4")
 	}
-	// Validate it is actually an IP — reject error messages from the CLI
 	if net.ParseIP(ip) == nil {
 		return "", fmt.Errorf("tailscale ip -4 returned non-IP output: %q", ip)
 	}
