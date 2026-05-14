@@ -13,10 +13,17 @@ func TestParseIPv4(t *testing.T) {
 		wantErr bool
 	}{
 		{"valid ip", "100.64.1.5\n", "100.64.1.5", false},
-		{"with trailing whitespace", "  100.64.1.5  \n", "100.64.1.5", false},
+		{"trailing whitespace", "  100.64.1.5  \n", "100.64.1.5", false},
+		{"multiple lines, first valid", "100.64.1.5\n100.64.1.6\n", "100.64.1.5", false},
+		{"headscale custom range", "10.0.0.5\n", "10.0.0.5", false},
 		{"empty output", "", "", true},
 		{"whitespace only", "  \n", "", true},
 		{"error message", "The Tailscale GUI failed to start\n", "", true},
+		{"not an ip", "not-an-ip\n", "", true},
+		// IPv6-only output must be rejected.
+		{"ipv6 only", "fd7a:115c:a1e0::1\n", "", true},
+		// Mixed: IPv6 line before IPv4.
+		{"ipv6 then ipv4", "fd7a:115c:a1e0::1\n100.64.1.5\n", "100.64.1.5", false},
 	}
 
 	for _, tt := range tests {
@@ -46,6 +53,22 @@ func TestIPFromInterface(t *testing.T) {
 		t.Fatalf("ipFromInterface() returned non-CGNAT IP: %s", ip)
 	}
 	t.Logf("found Tailscale IP: %s", ip)
+}
+
+// TestIPv4Integration calls the real IPv4() on this machine.
+// Run with: go test ./internal/tailscale/... -run TestIPv4Integration -v
+func TestIPv4Integration(t *testing.T) {
+	ip, err := IPv4()
+	if err != nil {
+		t.Logf("IPv4() error (ok if tailscale not running): %v", err)
+		return
+	}
+	t.Logf("IPv4() = %s", ip)
+
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.To4() == nil {
+		t.Errorf("IPv4() returned non-IPv4: %q", ip)
+	}
 }
 
 func TestTailscaleCGNAT(t *testing.T) {

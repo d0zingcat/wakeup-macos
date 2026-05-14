@@ -1,11 +1,13 @@
 package tailscale
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // tailscaleCGNAT is the Tailscale CGNAT range 100.64.0.0/10.
@@ -51,8 +53,8 @@ func Available() bool {
 }
 
 // IPv4 returns the Tailscale IPv4 address. It first checks network interfaces
-// for an IP in the CGNAT range (works as root without CLI), then falls back to
-// running the tailscale CLI.
+// for an IP in the CGNAT range (works as root without CLI, and never hangs),
+// then falls back to running the tailscale CLI with a timeout.
 func IPv4() (string, error) {
 	if ip, err := ipFromInterface(); err == nil {
 		return ip, nil
@@ -65,19 +67,31 @@ func IPv4() (string, error) {
 
 	var lastErr error
 	for _, bin := range bins {
-		out, err := exec.Command(bin, "ip", "-4").Output()
+		ip, err := ipFromCLI(bin)
 		if err != nil {
-			lastErr = fmt.Errorf("%s: %w", bin, err)
-			continue
-		}
-		ip, err := parseIPv4Output(string(out))
-		if err != nil {
-			lastErr = fmt.Errorf("%s: %w", bin, err)
+			lastErr = err
 			continue
 		}
 		return ip, nil
 	}
 	return "", fmt.Errorf("all tailscale binaries failed: %w", lastErr)
+}
+
+// ipFromCLI runs `tailscale ip -4` with a 5-second timeout.
+// The timeout prevents the daemon from hanging if the CLI stalls
+// (e.g. when the Tailscale GUI crashes or is unresponsive).
+func ipFromCLI(bin string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, bin, "ip", "-4").Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
+			return "", fmt.Errorf("%s: %s", bin, strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return "", fmt.Errorf("%s: %w", bin, err)
+	}
+	return parseIPv4Output(string(out))
 }
 
 // ipFromInterface scans network interfaces for an IPv4 in the Tailscale CGNAT range.
@@ -113,14 +127,18 @@ func ipFromInterface() (string, error) {
 	return "", fmt.Errorf("no interface with Tailscale CGNAT IP found")
 }
 
-// parseIPv4Output extracts and validates the IPv4 address from command output.
+// parseIPv4Output scans lines for the first valid IPv4 address.
+// Rejects non-IP output such as error messages written to stdout.
 func parseIPv4Output(output string) (string, error) {
-	ip := strings.TrimSpace(strings.SplitN(output, "\n", 2)[0])
-	if ip == "" {
-		return "", fmt.Errorf("empty output from tailscale ip -4")
+	for _, line := range strings.Split(output, "\n") {
+		candidate := strings.TrimSpace(line)
+		if candidate == "" {
+			continue
+		}
+		ip := net.ParseIP(candidate)
+		if ip != nil && ip.To4() != nil {
+			return candidate, nil
+		}
 	}
-	if net.ParseIP(ip) == nil {
-		return "", fmt.Errorf("tailscale ip -4 returned non-IP output: %q", ip)
-	}
-	return ip, nil
+	return "", fmt.Errorf("no valid IPv4 address in output: %q", strings.TrimSpace(output))
 }

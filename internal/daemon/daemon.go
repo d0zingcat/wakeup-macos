@@ -24,6 +24,9 @@ type Daemon struct {
 	configVersion string // remote config version hash
 	// darkwake detection (Phase 2) — wall clock only, no monotonic
 	lastWallTime time.Time
+	// tailscale IP cache: updated asynchronously, never blocks check/report
+	tailscaleIP string
+	tsIPCh      chan string
 }
 
 func New(cfg *config.Config) *Daemon {
@@ -32,6 +35,7 @@ func New(cfg *config.Config) *Daemon {
 		client:      cloud.NewClient(cfg.WorkerURL, cfg.Token),
 		sessionDone: make(chan *power.Session, 1),
 		onACPower:   true, // assume AC until first check
+		tsIPCh:      make(chan string, 1),
 	}
 }
 
@@ -152,22 +156,40 @@ func (d *Daemon) Run() error {
 	}
 }
 
+// refreshTailscaleIP kicks off a background goroutine to fetch the Tailscale IP.
+// The result is delivered via tsIPCh and applied before the next check runs.
+func (d *Daemon) refreshTailscaleIP() {
+	go func() {
+		ip, err := tailscale.IPv4()
+		if err != nil {
+			return // not installed, not running, or timed out — silently skip
+		}
+		select {
+		case d.tsIPCh <- ip:
+		default: // a result is already pending; discard the older one
+		}
+	}()
+}
+
 func (d *Daemon) check(ctx context.Context) {
+	// Apply any IP update delivered by the previous background refresh.
+	// This runs entirely in the main goroutine — no locking needed.
+	select {
+	case ip := <-d.tsIPCh:
+		if ip != d.tailscaleIP {
+			log.Printf("tailscale ip: %s", ip)
+			d.tailscaleIP = ip
+		}
+	default:
+	}
+
 	log.Printf("checking for wake signal (device=%s, power=%s)",
 		d.cfg.DeviceID, d.powerStateStr())
 
-	// Discover Tailscale IP if available (non-fatal if not)
-	var tsIP string
-	if tailscale.Available() {
-		ip, err := tailscale.IPv4()
-		if err != nil {
-			log.Printf("tailscale ip discovery failed (non-fatal): %v", err)
-		} else {
-			tsIP = ip
-		}
-	}
+	// Kick off the next IP refresh in the background; use the cached value now.
+	d.refreshTailscaleIP()
 
-	result, err := d.client.Check(ctx, d.cfg.DeviceID, d.configVersion, tsIP)
+	result, err := d.client.Check(ctx, d.cfg.DeviceID, d.configVersion, d.tailscaleIP)
 	if err != nil {
 		if ctx.Err() != nil {
 			return // shutting down, don't log
